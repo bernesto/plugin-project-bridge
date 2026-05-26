@@ -382,7 +382,7 @@ export async function handleProjectsWebhook(
   }
 
   // Check for existing issue
-  const originKind = "plugin:zoho-suite:projects-task";
+  const originKind = "plugin:project-bridge:projects-task";
   const originId = normalized.taskId;
 
   const existingIssues = await ctx.issues.list({
@@ -395,8 +395,13 @@ export async function handleProjectsWebhook(
   });
 
   const existing = existingIssues.length > 0 ? existingIssues[0] : null;
-  const issueStatus = mapStatus(normalized.status) as IssueStatus;
+  let issueStatus = mapStatus(normalized.status) as IssueStatus;
   const issuePriority = mapPriority(normalized.priority);
+
+  // Paperclip requires an assignee for in_progress issues — fall back to todo if unassigned
+  if (issueStatus === "in_progress" && !agentId) {
+    issueStatus = "todo";
+  }
 
   if (existing) {
     await ctx.issues.update(
@@ -429,7 +434,7 @@ export async function handleProjectsWebhook(
       entityType: "issue",
       entityId: issue.id,
       message: `Synced from Zoho Projects task "${normalized.taskName}" (${normalized.taskId})`,
-      metadata: { plugin: "zoho-suite" },
+      metadata: { plugin: "project-bridge" },
     });
   }
 }

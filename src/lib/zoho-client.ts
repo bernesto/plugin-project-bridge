@@ -20,8 +20,6 @@ function getDataCenter(dc: DataCenterKey) {
 function getBaseUrl(service: ZohoService, dc: DataCenterKey): string {
   const center = getDataCenter(dc);
   switch (service) {
-    case "cliq":
-      return `https://${center.cliq}/api/v2`;
     case "desk":
       return `https://${center.desk}/api/v1`;
     case "crm":

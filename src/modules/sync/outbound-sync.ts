@@ -29,7 +29,7 @@ export async function handleIssueUpdated(
 
   // Check if this is a Zoho-synced issue via originKind
   const originKind = issue.originKind;
-  if (!originKind?.startsWith("plugin:zoho-suite:")) {
+  if (!originKind?.startsWith("plugin:project-bridge:")) {
     return;
   }
 
