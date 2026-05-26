@@ -75,7 +75,46 @@ const plugin: PaperclipPlugin = definePlugin({
       };
     });
 
+    // ─── Services registry data handler ─────────────────────
+    ctx.data.register("services", async () => {
+      const services = (await ctx.state.get({ scopeKind: "instance", stateKey: "bridge.services" })) as any[] | null;
+      return services ?? [];
+    });
+
+    ctx.data.register("service-config", async (params) => {
+      const serviceId = params.serviceId as string;
+      if (!serviceId) return null;
+      const config = await ctx.state.get({ scopeKind: "instance", stateKey: `bridge.service.${serviceId}` });
+      return config ?? null;
+    });
+
     // ─── Action Handlers (for settings UI) ────────────────────
+    ctx.actions.register("add-service", async (params) => {
+      const serviceType = params.serviceType as string;
+      const services = ((await ctx.state.get({ scopeKind: "instance", stateKey: "bridge.services" })) as any[] | null) ?? [];
+      const serviceId = `${serviceType}-${Date.now()}`;
+      services.push({ id: serviceId, type: serviceType, name: params.name as string ?? serviceType, enabled: true, createdAt: new Date().toISOString() });
+      await ctx.state.set({ scopeKind: "instance", stateKey: "bridge.services" }, services);
+      return { ok: true, serviceId };
+    });
+
+    ctx.actions.register("remove-service", async (params) => {
+      const serviceId = params.serviceId as string;
+      const services = ((await ctx.state.get({ scopeKind: "instance", stateKey: "bridge.services" })) as any[] | null) ?? [];
+      const filtered = services.filter((s: any) => s.id !== serviceId);
+      await ctx.state.set({ scopeKind: "instance", stateKey: "bridge.services" }, filtered);
+      await ctx.state.delete({ scopeKind: "instance", stateKey: `bridge.service.${serviceId}` });
+      return { ok: true };
+    });
+
+    ctx.actions.register("save-service-config", async (params) => {
+      const serviceId = params.serviceId as string;
+      const config = params.config;
+      await ctx.state.set({ scopeKind: "instance", stateKey: `bridge.service.${serviceId}` }, config);
+      return { ok: true };
+    });
+
+    // Legacy actions (still used by sync handlers internally)
     ctx.actions.register("save-agent-mapping", async (params) => {
       await ctx.state.set({ scopeKind: "instance", stateKey: "zoho.agentMapping" }, params.mapping);
       return { ok: true };
