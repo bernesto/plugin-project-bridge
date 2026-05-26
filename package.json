@@ -1,0 +1,42 @@
+{
+  "name": "@paperclipai/plugin-project-bridge",
+  "version": "0.1.0",
+  "description": "Bridges external project management systems (Zoho Projects, etc.) with Paperclip — bidirectional sync of projects, tasks, and issues",
+  "type": "module",
+  "private": false,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "paperclipPlugin": {
+    "manifest": "./dist/manifest.js",
+    "worker": "./dist/worker.js",
+    "ui": "./dist/ui/"
+  },
+  "scripts": {
+    "build": "tsc && node ./scripts/build-ui.mjs",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@paperclipai/plugin-sdk": "*",
+    "@paperclipai/shared": "*"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.3",
+    "@types/node": "^24.6.0",
+    "@types/react": "^19.0.8",
+    "@types/react-dom": "^19.0.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.3"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bernesto/plugin-project-bridge.git"
+  },
+  "author": "Brian Ernesto <bernesto@neoreef.com>",
+  "license": "MIT"
+}
