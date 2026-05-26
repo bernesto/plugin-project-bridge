@@ -75,6 +75,14 @@ const plugin: PaperclipPlugin = definePlugin({
       };
     });
 
+    ctx.data.register("connect-url", async () => {
+      const config = (await ctx.config.get()) as { oauthCallbackUrl?: string };
+      // Derive the connect URL from the callback URL by replacing /callback with /connect
+      const callbackUrl = config.oauthCallbackUrl ?? "";
+      const connectUrl = callbackUrl ? callbackUrl.replace(/\/callback\/?$/, "/connect") : "";
+      return { connectUrl, configured: !!callbackUrl };
+    });
+
     // ─── Services registry data handler ─────────────────────
     ctx.data.register("services", async () => {
       const services = (await ctx.state.get({ scopeKind: "instance", stateKey: "bridge.services" })) as any[] | null;
@@ -220,14 +228,14 @@ const plugin: PaperclipPlugin = definePlugin({
       const code = typeof query.code === "string" ? query.code : Array.isArray(query.code) ? query.code[0] : null;
       if (!code) return { status: 400, body: "Missing authorization code" };
 
-      const config = (await ctx.config.get()) as { zohoClientId?: string; zohoClientSecret?: string; dataCenter?: DataCenterKey };
+      const config = (await ctx.config.get()) as { zohoClientId?: string; zohoClientSecret?: string; dataCenter?: DataCenterKey; oauthCallbackUrl?: string };
       if (!config.zohoClientId || !config.zohoClientSecret) {
         return { status: 400, body: "Missing Zoho Client ID or Secret in plugin config" };
       }
 
       const dc = (config.dataCenter ?? "US") as DataCenterKey;
       const center = DATA_CENTERS[dc] ?? DATA_CENTERS.US;
-      const redirectUri = typeof query.redirect_uri === "string" ? query.redirect_uri : "";
+      const redirectUri = config.oauthCallbackUrl ?? "";
 
       const params = new URLSearchParams({
         code,
@@ -267,19 +275,19 @@ const plugin: PaperclipPlugin = definePlugin({
 
     // OAuth initiation
     if (reqPath.endsWith("/connect")) {
-      const config = (await ctx.config.get()) as { zohoClientId?: string; dataCenter?: DataCenterKey };
+      const config = (await ctx.config.get()) as { zohoClientId?: string; dataCenter?: DataCenterKey; oauthCallbackUrl?: string };
       if (!config.zohoClientId) return { status: 400, body: "Configure Zoho Client ID first" };
+      if (!config.oauthCallbackUrl) return { status: 400, body: "Configure OAuth Callback URL first (must match Zoho API Console redirect URI)" };
 
       const dc = (config.dataCenter ?? "US") as DataCenterKey;
       const center = DATA_CENTERS[dc] ?? DATA_CENTERS.US;
-      const callbackUrl = reqPath.replace("/connect", "/callback");
 
       const authUrl = `https://${center.accounts}/oauth/v2/auth?` +
         new URLSearchParams({
           client_id: config.zohoClientId,
           response_type: "code",
           scope: ZOHO_SCOPES,
-          redirect_uri: callbackUrl,
+          redirect_uri: config.oauthCallbackUrl,
           access_type: "offline",
           prompt: "consent",
         }).toString();

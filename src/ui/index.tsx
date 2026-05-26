@@ -121,14 +121,15 @@ function MappingTable<T extends Record<string, string>>({
 
 // ─── Zoho Projects Service Config ───────────────────────────────────────────
 
+type ConnectUrlData = { connectUrl: string; configured: boolean };
+
 function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
-  const { data: status } = usePluginData<ConnectionStatus>("connection-status");
-  const saveServiceConfig = usePluginAction("save-service-config");
+  const { data: status, refresh } = usePluginData<ConnectionStatus>("connection-status");
+  const { data: connectData } = usePluginData<ConnectUrlData>("connect-url");
   const saveGroupMapping = usePluginAction("save-group-mapping");
   const saveAgentMapping = usePluginAction("save-agent-mapping");
   const saveProjectMapping = usePluginAction("save-project-mapping");
   const disconnectAction = usePluginAction("disconnect");
-  const { refresh } = usePluginData<ConnectionStatus>("connection-status");
 
   const [groupRows, setGroupRows] = useState([{ groupName: "", companyId: "" }]);
   const [agentRows, setAgentRows] = useState([{ zohoName: "", paperclipAgentId: "" }]);
@@ -158,7 +159,7 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
               </span>
             </p>
             <div style={btnGroup}>
-              <a href="./api/connect" target="_blank" rel="noopener" style={{ textDecoration: "none" }}>
+              <a href={connectData?.connectUrl || "#"} target="_blank" rel="noopener" style={{ textDecoration: "none" }}>
                 <button type="button" style={btn}>Reconnect</button>
               </a>
               <button type="button" style={btnDanger} onClick={handleDisconnect}>Disconnect</button>
@@ -170,11 +171,17 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
               <span style={dot(false)} />
               Not connected
             </p>
-            <p style={muted}>Configure Client ID and Secret in plugin config, then connect.</p>
+            <p style={muted}>Configure Client ID, Secret, and OAuth Callback URL in plugin config, then connect.</p>
             <div style={btnGroup}>
-              <a href="./api/connect" target="_blank" rel="noopener" style={{ textDecoration: "none" }}>
-                <button type="button" style={btnPrimary}>Connect to Zoho</button>
-              </a>
+              {connectData?.configured ? (
+                <a href={connectData.connectUrl} target="_blank" rel="noopener" style={{ textDecoration: "none" }}>
+                  <button type="button" style={btnPrimary}>Connect to Zoho</button>
+                </a>
+              ) : (
+                <button type="button" style={{ ...btnPrimary, opacity: 0.5, cursor: "not-allowed" }} disabled>
+                  Connect to Zoho (configure OAuth Callback URL first)
+                </button>
+              )}
             </div>
           </>
         )}

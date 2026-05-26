@@ -41,6 +41,7 @@ const manifest: PaperclipPluginManifestV1 = {
     "secrets.read-ref",
     "instance.settings.register",
     "ui.page.register",
+    "api.routes.register",
   ],
   entrypoints: {
     worker: "./dist/worker.js",
@@ -62,6 +63,11 @@ const manifest: PaperclipPluginManifestV1 = {
         title: "Zoho Data Center",
         enum: ["US", "EU", "IN", "AU", "JP", "CA"],
         default: "US",
+      },
+      oauthCallbackUrl: {
+        type: "string",
+        title: "OAuth Callback URL",
+        description: "Full URL for OAuth redirect (e.g. https://cortex.neoreef.com:8443/paperclip/api/plugins/{pluginId}/routes/callback). Must match the redirect URI registered in Zoho API Console.",
       },
       projectsEnabled: {
         type: "boolean",
@@ -106,6 +112,22 @@ const manifest: PaperclipPluginManifestV1 = {
       endpointKey: WEBHOOK_KEYS.desk,
       displayName: "Zoho Desk",
       description: "Receives ticket events from Zoho Desk webhooks",
+    },
+  ],
+  apiRoutes: [
+    {
+      routeKey: "oauth-connect",
+      method: "GET",
+      path: "/connect",
+      auth: "board",
+      capability: "api.routes.register",
+    },
+    {
+      routeKey: "oauth-callback",
+      method: "GET",
+      path: "/callback",
+      auth: "board",
+      capability: "api.routes.register",
     },
   ],
   ui: {
