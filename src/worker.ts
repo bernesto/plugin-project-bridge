@@ -104,6 +104,12 @@ const plugin: PaperclipPlugin = definePlugin({
       return { ok: true };
     });
 
+    ctx.actions.register("disconnect", async () => {
+      await ctx.state.delete({ scopeKind: "instance", stateKey: "zoho.auth" });
+      ctx.logger.info("Disconnected from Zoho");
+      return { ok: true };
+    });
+
     ctx.logger.info("Project Bridge plugin setup complete");
   },
 
