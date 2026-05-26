@@ -276,44 +276,42 @@ export function ProjectBridgeSettingsPage(_props: PluginSettingsPageProps) {
 
   return (
     <div style={{ padding: "1.5rem", maxWidth: 850 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem" }}>
-        <h2 style={{ margin: 0 }}>Project Bridge</h2>
-        {!addingService && (
-          <button type="button" style={btnPrimary} onClick={() => setAddingService(true)}>+ Add Service</button>
-        )}
-      </div>
 
-      {/* Add Service Panel */}
-      {addingService && (
-        <div style={{ ...cardStyle, borderColor: "var(--foreground)", marginBottom: "1.5rem" }}>
-          <h3 style={{ marginTop: 0, marginBottom: "0.75rem" }}>Add Service</h3>
-          <div style={row}>
-            <select style={select} value={selectedType} onChange={(e) => setSelectedType(e.target.value)}>
-              <option value="">Select a service...</option>
-              {AVAILABLE_SERVICES.map((s) => (
-                <option key={s.type} value={s.type} disabled={configuredTypes.has(s.type)}>
-                  {s.name}{configuredTypes.has(s.type) ? " (already added)" : ""}{s.status === "coming-soon" ? " (coming soon)" : ""}
-                </option>
-              ))}
-            </select>
-            <button type="button" style={btnPrimary} onClick={handleAddService} disabled={!selectedType}>Add</button>
-            <button type="button" style={btn} onClick={() => { setAddingService(false); setSelectedType(""); }}>Cancel</button>
-          </div>
-          {selectedType && (
-            <p style={{ ...muted, marginTop: "0.5rem" }}>
-              {AVAILABLE_SERVICES.find((s) => s.type === selectedType)?.description}
-            </p>
+      {/* Connected Services */}
+      <div style={section}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
+          <h3 style={{ margin: 0 }}>Connected Services</h3>
+          {!addingService && (
+            <button type="button" style={btnSmall} onClick={() => setAddingService(true)}>+ Add Service</button>
           )}
         </div>
-      )}
 
-      {/* Service Cards */}
-      {serviceList.length === 0 && !addingService && (
-        <div style={{ textAlign: "center", padding: "3rem 1rem" }}>
-          <p style={{ ...muted, fontSize: "14px" }}>No services configured.</p>
-          <p style={muted}>Click <strong>+ Add Service</strong> to connect an external project management system.</p>
-        </div>
-      )}
+        {/* Add Service Panel */}
+        {addingService && (
+          <div style={{ ...cardStyle, borderColor: "var(--border)" }}>
+            <div style={row}>
+              <select style={select} value={selectedType} onChange={(e) => setSelectedType(e.target.value)}>
+                <option value="">Select a service...</option>
+                {AVAILABLE_SERVICES.map((s) => (
+                  <option key={s.type} value={s.type} disabled={configuredTypes.has(s.type)}>
+                    {s.name}{configuredTypes.has(s.type) ? " (already added)" : ""}{s.status === "coming-soon" ? " (coming soon)" : ""}
+                  </option>
+                ))}
+              </select>
+              <button type="button" style={btnPrimary} onClick={handleAddService} disabled={!selectedType}>Add</button>
+              <button type="button" style={btn} onClick={() => { setAddingService(false); setSelectedType(""); }}>Cancel</button>
+            </div>
+            {selectedType && (
+              <p style={{ ...muted, marginTop: "0.5rem", marginBottom: 0 }}>
+                {AVAILABLE_SERVICES.find((s) => s.type === selectedType)?.description}
+              </p>
+            )}
+          </div>
+        )}
+
+        {serviceList.length === 0 && !addingService && (
+          <p style={muted}>No services connected yet. Add a service to start syncing projects and tasks.</p>
+        )}
 
       {serviceList.map((svc) => {
         const def = AVAILABLE_SERVICES.find((d) => d.type === svc.type);
@@ -360,6 +358,7 @@ export function ProjectBridgeSettingsPage(_props: PluginSettingsPageProps) {
           </div>
         );
       })}
+      </div>
     </div>
   );
 }
