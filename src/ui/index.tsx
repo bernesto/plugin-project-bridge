@@ -373,7 +373,7 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
         <div style={section}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
             <h4 style={{ margin: 0 }}>Organization Mapping</h4>
-            {!addingOrg && zohoClientOptions.length > 0 && (
+            {!addingOrg && (
               <button type="button" style={btnSmall} onClick={() => setAddingOrg(true)}>+ Add</button>
             )}
           </div>
