@@ -16,12 +16,12 @@ const btnDanger: CSSProperties = { ...btn, color: "var(--destructive, #dc2626)",
 const btnSmall: CSSProperties = { ...btn, padding: "4px 10px", fontSize: "11px" };
 const btnSmallDanger: CSSProperties = { ...btnDanger, padding: "4px 10px", fontSize: "11px" };
 
-const input: CSSProperties = {
+const inputStyle: CSSProperties = {
   flex: 1, border: "1px solid var(--border)", borderRadius: "8px",
   padding: "8px 10px", background: "transparent", color: "inherit", fontSize: "12px", minWidth: 0,
 };
 const selectStyle: CSSProperties = {
-  ...input, flex: 1, cursor: "pointer", minWidth: 160,
+  ...inputStyle, cursor: "pointer", minWidth: 160,
 };
 
 const section: CSSProperties = { marginBottom: "1.5rem", borderBottom: "1px solid var(--border)", paddingBottom: "1.25rem" };
@@ -68,27 +68,125 @@ const AVAILABLE_SERVICES: ServiceDef[] = [
   { type: "notion", name: "Notion", description: "Database and checklist sync", status: "coming-soon" },
 ];
 
-// ─── Helper: extract company prefix from project name ───────────────────────
+// ─── Autocomplete Component ─────────────────────────────────────────────────
+
+type AutocompleteOption = { id: string; label: string; sublabel?: string };
+
+function Autocomplete({
+  options, value, onChange, placeholder, disabled,
+}: {
+  options: AutocompleteOption[];
+  value: string;
+  onChange: (id: string, label: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+}) {
+  const [query, setQuery] = useState(value ? options.find((o) => o.id === value)?.label ?? "" : "");
+  const [open, setOpen] = useState(false);
+  const [focusIdx, setFocusIdx] = useState(-1);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  const filtered = query.length === 0
+    ? options
+    : options.filter((o) =>
+        o.label.toLowerCase().includes(query.toLowerCase()) ||
+        (o.sublabel?.toLowerCase().includes(query.toLowerCase()) ?? false)
+      );
+
+  // Close on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  // Sync external value changes
+  useEffect(() => {
+    if (value) {
+      const match = options.find((o) => o.id === value);
+      if (match && match.label !== query) setQuery(match.label);
+    }
+  }, [value, options]);
+
+  const select = (opt: AutocompleteOption) => {
+    setQuery(opt.label);
+    setOpen(false);
+    setFocusIdx(-1);
+    onChange(opt.id, opt.label);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!open) { if (e.key === "ArrowDown" || e.key === "Enter") setOpen(true); return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); setFocusIdx((i) => Math.min(i + 1, filtered.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setFocusIdx((i) => Math.max(i - 1, 0)); }
+    else if (e.key === "Enter" && focusIdx >= 0 && filtered[focusIdx]) { e.preventDefault(); select(filtered[focusIdx]); }
+    else if (e.key === "Escape") { setOpen(false); }
+  };
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative", flex: 1, minWidth: 0 }}>
+      <input
+        style={inputStyle}
+        placeholder={placeholder}
+        value={query}
+        disabled={disabled}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); setFocusIdx(-1); if (!e.target.value) onChange("", ""); }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={handleKeyDown}
+      />
+      {open && filtered.length > 0 && (
+        <div style={{
+          position: "absolute", top: "100%", left: 0, right: 0, zIndex: 50,
+          maxHeight: 200, overflowY: "auto",
+          border: "1px solid var(--border)", borderRadius: "8px",
+          background: "var(--popover, var(--background, #1a1a1a))",
+          boxShadow: "0 4px 12px rgba(0,0,0,0.3)", marginTop: 2,
+        }}>
+          {filtered.map((opt, i) => (
+            <div
+              key={opt.id}
+              style={{
+                padding: "6px 10px", cursor: "pointer", fontSize: "12px",
+                background: i === focusIdx ? "var(--accent, rgba(255,255,255,0.1))" : "transparent",
+              }}
+              onMouseEnter={() => setFocusIdx(i)}
+              onMouseDown={(e) => { e.preventDefault(); select(opt); }}
+            >
+              {opt.label}
+              {opt.sublabel && <span style={{ ...muted, marginLeft: 6 }}>{opt.sublabel}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+      {open && filtered.length === 0 && query.length > 0 && (
+        <div style={{
+          position: "absolute", top: "100%", left: 0, right: 0, zIndex: 50,
+          padding: "8px 10px", fontSize: "12px",
+          border: "1px solid var(--border)", borderRadius: "8px",
+          background: "var(--popover, var(--background, #1a1a1a))",
+          color: "var(--muted-foreground, #888)", marginTop: 2,
+        }}>
+          No matches
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
 
 function extractCompanyPrefix(projectName: string): string {
   if (projectName.includes(" - ")) return projectName.split(" - ")[0].trim();
   return "";
 }
 
-function getUniqueCompanyPrefixes(projects: ZohoProject[]): string[] {
-  const prefixes = new Set<string>();
-  for (const p of projects) {
-    const prefix = extractCompanyPrefix(p.name);
-    if (prefix) prefixes.add(prefix);
-  }
-  return Array.from(prefixes).sort();
-}
-
 // ─── Zoho Projects Service Config ───────────────────────────────────────────
 
-type OrgMapping = { zohoCompany: string; paperclipCompanyId: string };
-type AgentMapping = { zohoName: string; paperclipAgentId: string; org: string };
-type ProjectMapping = { zohoProjectId: string; zohoProjectName: string; paperclipProjectId: string; org: string };
+type OrgMapping = { zohoCompanyId: string; zohoCompany: string; paperclipCompanyId: string; paperclipCompanyName: string };
+type AgentMapping = { zohoUserId: string; zohoName: string; paperclipAgentId: string; paperclipAgentName: string; org: string };
+type ProjectMapping = { zohoProjectId: string; zohoProjectName: string; paperclipProjectId: string; paperclipProjectName: string; org: string };
 
 function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
   const { data: status, refresh } = usePluginData<ConnectionStatus>("connection-status");
@@ -105,8 +203,10 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
   const [agentMappings, setAgentMappings] = useState<AgentMapping[]>([]);
   const [projectMappings, setProjectMappings] = useState<ProjectMapping[]>([]);
   const [addingOrg, setAddingOrg] = useState(false);
-  const [newOrgZoho, setNewOrgZoho] = useState("");
-  const [newOrgPaperclip, setNewOrgPaperclip] = useState("");
+  const [newOrgZohoId, setNewOrgZohoId] = useState("");
+  const [newOrgZohoName, setNewOrgZohoName] = useState("");
+  const [newOrgPaperclipId, setNewOrgPaperclipId] = useState("");
+  const [newOrgPaperclipName, setNewOrgPaperclipName] = useState("");
 
   // Poll while disconnected
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -131,53 +231,58 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
   const zohoClients = zohoClientsData?.clients ?? [];
   const zohoProjects = zohoProjectsData?.projects ?? [];
   const paperclipCompanies = paperclipCompaniesData?.companies ?? [];
-  const mappedZohoCompanies = new Set(orgMappings.map((m) => m.zohoCompany));
-  const unmappedZohoClients = zohoClients.filter((c) => !mappedZohoCompanies.has(c.name));
+  const mappedZohoClientIds = new Set(orgMappings.map((m) => m.zohoCompanyId));
   const mappedPaperclipCompanyIds = new Set(orgMappings.map((m) => m.paperclipCompanyId));
 
-  // Auto-save org mapping
-  const saveOrgs = useCallback(async (mappings: OrgMapping[]) => {
+  // Autocomplete options
+  const zohoClientOptions: AutocompleteOption[] = zohoClients
+    .filter((c) => !mappedZohoClientIds.has(c.id))
+    .map((c) => ({ id: c.id, label: c.name, sublabel: `${c.users.length} users` }));
+
+  const paperclipCompanyOptions: AutocompleteOption[] = paperclipCompanies
+    .filter((c) => !mappedPaperclipCompanyIds.has(c.id))
+    .map((c) => ({ id: c.id, label: c.name }));
+
+  // Auto-save org mappings
+  const persistOrgs = useCallback(async (mappings: OrgMapping[]) => {
     await saveGroupMapping({
       mapping: mappings.map((m) => ({ groupName: m.zohoCompany, companyId: m.paperclipCompanyId })),
     });
   }, [saveGroupMapping]);
 
   const handleAddOrg = useCallback(async () => {
-    if (!newOrgZoho || !newOrgPaperclip) return;
-    const updated = [...orgMappings, { zohoCompany: newOrgZoho, paperclipCompanyId: newOrgPaperclip }];
+    if (!newOrgZohoId || !newOrgPaperclipId) return;
+    const updated = [...orgMappings, {
+      zohoCompanyId: newOrgZohoId, zohoCompany: newOrgZohoName,
+      paperclipCompanyId: newOrgPaperclipId, paperclipCompanyName: newOrgPaperclipName,
+    }];
     setOrgMappings(updated);
     setAddingOrg(false);
-    setNewOrgZoho("");
-    setNewOrgPaperclip("");
-    await saveOrgs(updated);
-  }, [newOrgZoho, newOrgPaperclip, orgMappings, saveOrgs]);
+    setNewOrgZohoId(""); setNewOrgZohoName("");
+    setNewOrgPaperclipId(""); setNewOrgPaperclipName("");
+    await persistOrgs(updated);
+  }, [newOrgZohoId, newOrgZohoName, newOrgPaperclipId, newOrgPaperclipName, orgMappings, persistOrgs]);
 
-  const handleRemoveOrg = useCallback(async (zohoCompany: string) => {
-    const updated = orgMappings.filter((m) => m.zohoCompany !== zohoCompany);
+  const handleRemoveOrg = useCallback(async (zohoCompanyId: string) => {
+    const updated = orgMappings.filter((m) => m.zohoCompanyId !== zohoCompanyId);
     setOrgMappings(updated);
-    // Also remove agent/project mappings for this org
-    setAgentMappings((prev) => prev.filter((a) => a.org !== zohoCompany));
-    setProjectMappings((prev) => prev.filter((p) => p.org !== zohoCompany));
-    await saveOrgs(updated);
-  }, [orgMappings, saveOrgs]);
+    setAgentMappings((prev) => prev.filter((a) => a.org !== zohoCompanyId));
+    setProjectMappings((prev) => prev.filter((p) => p.org !== zohoCompanyId));
+    await persistOrgs(updated);
+  }, [orgMappings, persistOrgs]);
 
-  // Get Paperclip company name by ID
-  const getCompanyName = (id: string) => paperclipCompanies.find((c) => c.id === id)?.name ?? id;
+  // Get Zoho client users for an org
+  const getUsersForOrg = (zohoCompanyId: string) => zohoClients.find((c) => c.id === zohoCompanyId)?.users ?? [];
 
-  // Get Zoho projects for a specific org (by name prefix)
-  const getProjectsForOrg = (org: string) => zohoProjects.filter((p) => extractCompanyPrefix(p.name) === org);
-
-  // Get Zoho client users for a specific org
-  const getUsersForOrg = (org: string) => zohoClients.find((c) => c.name === org)?.users ?? [];
+  // Get Zoho projects for an org (by name prefix matching the company name)
+  const getProjectsForOrg = (zohoCompanyName: string) => zohoProjects.filter((p) => extractCompanyPrefix(p.name) === zohoCompanyName);
 
   // Get Paperclip agents for a company
-  const [agentsByCompany, setAgentsByCompany] = useState<Record<string, IdName[]>>({});
-  const loadAgentsForCompany = useCallback(async (companyId: string) => {
-    // This is a simple cache — only fetch once per company
-    if (agentsByCompany[companyId]) return;
-    // We can't call usePluginData conditionally, so we use the action pattern
-    // For now, agents will be loaded via a separate data call
-  }, [agentsByCompany]);
+  const paperclipAgentOptions = useCallback((companyId: string): AutocompleteOption[] => {
+    // For now return empty — agents need to be fetched per-company
+    // TODO: use usePluginData("paperclip-agents", { companyId }) when we can call hooks dynamically
+    return [];
+  }, []);
 
   return (
     <div style={{ marginTop: "0.5rem" }}>
@@ -226,120 +331,109 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
 
       {/* ─── Mappings (gated on connection) ─────────────────── */}
       {status?.connected && (
-        <>
-          {/* Organization Mapping */}
-          <div style={section}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
-              <h4 style={{ margin: 0 }}>Organization Mapping</h4>
-              {!addingOrg && unmappedZohoClients.length > 0 && (
-                <button type="button" style={btnSmall} onClick={() => setAddingOrg(true)}>+ Add</button>
-              )}
-            </div>
-            <p style={muted}>Map Zoho client companies to Paperclip organizations.</p>
-
-            {/* Existing org mappings */}
-            {orgMappings.map((mapping) => (
-              <div key={mapping.zohoCompany} style={{ marginBottom: "1.25rem" }}>
-                <div style={row}>
-                  <span style={{ flex: 1, fontSize: "13px" }}><strong>{mapping.zohoCompany}</strong> (Zoho)</span>
-                  <span style={muted}>→</span>
-                  <span style={{ flex: 1, fontSize: "13px" }}><strong>{getCompanyName(mapping.paperclipCompanyId)}</strong> (Paperclip)</span>
-                  <button type="button" style={btnSmallDanger} onClick={() => handleRemoveOrg(mapping.zohoCompany)} title="Remove">x</button>
-                </div>
-
-                {/* Nested: Agents for this org */}
-                <div style={subsectionStyle}>
-                  <p style={{ ...muted, marginBottom: "0.5rem", marginTop: "0.25rem" }}>
-                    <strong>Agents</strong> — {getUsersForOrg(mapping.zohoCompany).length} Zoho client users
-                  </p>
-                  {getUsersForOrg(mapping.zohoCompany).map((zu) => {
-                    const existingAgent = agentMappings.find((am) => am.zohoName === zu.name && am.org === mapping.zohoCompany);
-                    return (
-                      <div key={zu.id} style={{ ...row, fontSize: "12px" }}>
-                        <span style={{ flex: 1 }}>{zu.name} <span style={muted}>({zu.email})</span></span>
-                        <span style={muted}>→</span>
-                        <span style={{ flex: 1, color: existingAgent ? "inherit" : "var(--muted-foreground, #888)" }}>
-                          {existingAgent ? existingAgent.paperclipAgentId : "(auto-match by name)"}
-                        </span>
-                      </div>
-                    );
-                  })}
-                  {getUsersForOrg(mapping.zohoCompany).length === 0 && (
-                    <p style={muted}>No client users found. Users are loaded from the Zoho client company.</p>
-                  )}
-                </div>
-
-                {/* Nested: Projects for this org */}
-                <div style={subsectionStyle}>
-                  <p style={{ ...muted, marginBottom: "0.5rem", marginTop: "0.25rem" }}>
-                    <strong>Projects</strong> — {getProjectsForOrg(mapping.zohoCompany).length} Zoho projects
-                  </p>
-                  {getProjectsForOrg(mapping.zohoCompany).map((zp) => {
-                    const existing = projectMappings.find((pm) => pm.zohoProjectId === zp.id);
-                    return (
-                      <div key={zp.id} style={{ ...row, fontSize: "12px" }}>
-                        <span style={{ flex: 1 }}>{zp.name}</span>
-                        <span style={muted}>→</span>
-                        <span style={{ flex: 1, color: existing ? "inherit" : "var(--muted-foreground, #888)" }}>
-                          {existing ? existing.zohoProjectName : "(auto-link by name)"}
-                        </span>
-                      </div>
-                    );
-                  })}
-                  {getProjectsForOrg(mapping.zohoCompany).length === 0 && (
-                    <p style={muted}>No projects found for this organization.</p>
-                  )}
-                </div>
-              </div>
-            ))}
-
-            {/* Add org mapping */}
-            {addingOrg && (
-              <div style={{ ...cardStyle, padding: "0.75rem 1rem" }}>
-                <div style={row}>
-                  <select
-                    style={selectStyle}
-                    value={newOrgZoho}
-                    onChange={(e) => setNewOrgZoho(e.target.value)}
-                  >
-                    <option value="">Select Zoho client company...</option>
-                    {unmappedZohoClients.map((c) => (
-                      <option key={c.id} value={c.name}>{c.name}</option>
-                    ))}
-                  </select>
-                  <span style={muted}>→</span>
-                  <select
-                    style={selectStyle}
-                    value={newOrgPaperclip}
-                    onChange={(e) => setNewOrgPaperclip(e.target.value)}
-                  >
-                    <option value="">Select Paperclip company...</option>
-                    {paperclipCompanies
-                      .filter((c) => !mappedPaperclipCompanyIds.has(c.id))
-                      .map((c) => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
-                      ))}
-                  </select>
-                  <button type="button" style={btnPrimary} onClick={handleAddOrg} disabled={!newOrgZoho || !newOrgPaperclip}>
-                    Save
-                  </button>
-                  <button type="button" style={btn} onClick={() => { setAddingOrg(false); setNewOrgZoho(""); setNewOrgPaperclip(""); }}>
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {orgMappings.length === 0 && !addingOrg && (
-              <p style={muted}>
-                {zohoClients.length > 0
-                  ? `${zohoClients.length} Zoho client companies found. Click + Add to map them to Paperclip organizations.`
-                  : "Loading Zoho client companies..."
-                }
-              </p>
+        <div style={section}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+            <h4 style={{ margin: 0 }}>Organization Mapping</h4>
+            {!addingOrg && zohoClientOptions.length > 0 && (
+              <button type="button" style={btnSmall} onClick={() => setAddingOrg(true)}>+ Add</button>
             )}
           </div>
-        </>
+          <p style={muted}>Map Zoho client companies to Paperclip organizations. Agent and project mappings appear under each organization.</p>
+
+          {/* Existing org mappings */}
+          {orgMappings.map((mapping) => (
+            <div key={mapping.zohoCompanyId} style={{ marginBottom: "1.25rem" }}>
+              <div style={row}>
+                <span style={{ flex: 1, fontSize: "13px" }}><strong>{mapping.zohoCompany}</strong></span>
+                <span style={muted}>→</span>
+                <span style={{ flex: 1, fontSize: "13px" }}><strong>{mapping.paperclipCompanyName}</strong></span>
+                <button type="button" style={btnSmallDanger} onClick={() => handleRemoveOrg(mapping.zohoCompanyId)} title="Remove mapping">x</button>
+              </div>
+
+              {/* Nested: Agents */}
+              <div style={subsectionStyle}>
+                <p style={{ ...muted, marginBottom: "0.5rem", marginTop: "0.25rem" }}>
+                  <strong>Agents</strong> — {getUsersForOrg(mapping.zohoCompanyId).length} Zoho client users
+                </p>
+                {getUsersForOrg(mapping.zohoCompanyId).map((zu) => {
+                  const existingAgent = agentMappings.find((am) => am.zohoUserId === zu.id);
+                  return (
+                    <div key={zu.id} style={{ ...row, fontSize: "12px" }}>
+                      <span style={{ flex: 1 }}>{zu.name} <span style={muted}>({zu.email})</span></span>
+                      <span style={muted}>→</span>
+                      <span style={{ flex: 1, color: existingAgent ? "inherit" : "var(--muted-foreground, #888)" }}>
+                        {existingAgent ? existingAgent.paperclipAgentName : "(auto-match by name)"}
+                      </span>
+                    </div>
+                  );
+                })}
+                {getUsersForOrg(mapping.zohoCompanyId).length === 0 && (
+                  <p style={muted}>No client users found for this company.</p>
+                )}
+              </div>
+
+              {/* Nested: Projects */}
+              <div style={subsectionStyle}>
+                <p style={{ ...muted, marginBottom: "0.5rem", marginTop: "0.25rem" }}>
+                  <strong>Projects</strong> — {getProjectsForOrg(mapping.zohoCompany).length} Zoho projects
+                </p>
+                {getProjectsForOrg(mapping.zohoCompany).map((zp) => {
+                  const existing = projectMappings.find((pm) => pm.zohoProjectId === zp.id);
+                  return (
+                    <div key={zp.id} style={{ ...row, fontSize: "12px" }}>
+                      <span style={{ flex: 1 }}>{zp.name}</span>
+                      <span style={muted}>→</span>
+                      <span style={{ flex: 1, color: existing ? "inherit" : "var(--muted-foreground, #888)" }}>
+                        {existing ? existing.paperclipProjectName : "(auto-link by name)"}
+                      </span>
+                    </div>
+                  );
+                })}
+                {getProjectsForOrg(mapping.zohoCompany).length === 0 && (
+                  <p style={muted}>No projects found for this organization.</p>
+                )}
+              </div>
+            </div>
+          ))}
+
+          {/* Add org mapping */}
+          {addingOrg && (
+            <div style={{ ...cardStyle, padding: "0.75rem 1rem" }}>
+              <div style={row}>
+                <Autocomplete
+                  options={zohoClientOptions}
+                  value={newOrgZohoId}
+                  onChange={(id, label) => { setNewOrgZohoId(id); setNewOrgZohoName(label); }}
+                  placeholder="Search Zoho client company..."
+                />
+                <span style={muted}>→</span>
+                <Autocomplete
+                  options={paperclipCompanyOptions}
+                  value={newOrgPaperclipId}
+                  onChange={(id, label) => { setNewOrgPaperclipId(id); setNewOrgPaperclipName(label); }}
+                  placeholder="Search Paperclip company..."
+                />
+              </div>
+              <div style={btnGroup}>
+                <button type="button" style={btnPrimary} onClick={handleAddOrg} disabled={!newOrgZohoId || !newOrgPaperclipId}>
+                  Save
+                </button>
+                <button type="button" style={btn} onClick={() => { setAddingOrg(false); setNewOrgZohoId(""); setNewOrgZohoName(""); setNewOrgPaperclipId(""); setNewOrgPaperclipName(""); }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {orgMappings.length === 0 && !addingOrg && (
+            <p style={muted}>
+              {zohoClients.length > 0
+                ? `${zohoClients.length} Zoho client companies found. Click + Add to map them.`
+                : "Loading Zoho client companies..."
+              }
+            </p>
+          )}
+        </div>
       )}
     </div>
   );
@@ -366,7 +460,7 @@ export function ProjectBridgeSettingsPage(_props: PluginSettingsPageProps) {
   const [selectedType, setSelectedType] = useState("");
   const [expandedService, setExpandedService] = useState<string | null>(null);
 
-  // Poll connection status every 3s so badge updates after connect/disconnect
+  // Poll connection status so badge updates after connect/disconnect
   const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     statusPollRef.current = setInterval(() => refreshStatus(), 3000);
@@ -392,7 +486,6 @@ export function ProjectBridgeSettingsPage(_props: PluginSettingsPageProps) {
   const serviceList = services ?? [];
   const configuredTypes = new Set(serviceList.map((s) => s.type));
 
-  // Determine button label for each service
   const getServiceButtonLabel = (svc: ServiceRecord, isExpanded: boolean): string => {
     if (isExpanded) return "Collapse";
     if (svc.type === "zoho-projects" && status?.connected) return "Edit";
@@ -454,16 +547,10 @@ export function ProjectBridgeSettingsPage(_props: PluginSettingsPageProps) {
                   <button type="button" style={btnSmall} onClick={() => setExpandedService(isExpanded ? null : svc.id)}>
                     {getServiceButtonLabel(svc, isExpanded)}
                   </button>
-                  <button type="button" style={btnSmallDanger} onClick={() => handleRemoveService(svc.id)}>
-                    Remove
-                  </button>
+                  <button type="button" style={btnSmallDanger} onClick={() => handleRemoveService(svc.id)}>Remove</button>
                 </div>
               </div>
-
-              {!isExpanded && (
-                <p style={{ ...muted, margin: 0 }}>{def?.description ?? svc.type}</p>
-              )}
-
+              {!isExpanded && <p style={{ ...muted, margin: 0 }}>{def?.description ?? svc.type}</p>}
               {isExpanded && (
                 def?.status === "coming-soon"
                   ? <ComingSoonConfig serviceDef={def} />
