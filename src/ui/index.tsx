@@ -1,4 +1,4 @@
-import { useState, useCallback, type FormEvent, type CSSProperties, type ReactNode } from "react";
+import { useState, useCallback, useEffect, useRef, type FormEvent, type CSSProperties, type ReactNode } from "react";
 import {
   usePluginAction,
   usePluginData,
@@ -134,6 +134,18 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
   const [groupRows, setGroupRows] = useState([{ groupName: "", companyId: "" }]);
   const [agentRows, setAgentRows] = useState([{ zohoName: "", paperclipAgentId: "" }]);
   const [projectRows, setProjectRows] = useState([{ zohoProjectId: "", paperclipProjectId: "", paperclipCompanyId: "" }]);
+
+  // Poll for connection status while disconnected (catches OAuth callback completion)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (!status?.connected) {
+      pollRef.current = setInterval(() => refresh(), 3000);
+    } else if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [status?.connected, refresh]);
 
   const handleDisconnect = useCallback(async () => {
     if (confirm("Disconnect from Zoho? You will need to re-authenticate.")) {

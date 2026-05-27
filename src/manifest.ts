@@ -113,7 +113,7 @@ const manifest: PaperclipPluginManifestV1 = {
       description: "Receives ticket events from Zoho Desk webhooks",
     },
     {
-      endpointKey: WEBHOOK_KEYS.oauthCallback,
+      endpointKey: "oauth-callback",
       displayName: "OAuth Callback",
       description: "Receives OAuth authorization code from Zoho",
     },
