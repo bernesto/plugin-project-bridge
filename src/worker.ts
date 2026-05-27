@@ -202,7 +202,7 @@ const plugin: PaperclipPlugin = definePlugin({
         const portalId = (params.portalId as string) || config.portalId;
         if (!portalId) return { users: [], error: "No portalId" };
         const result = await projectsFetch(ctx, "GET", `/portal/${portalId}/users/?range=200&status=active`);
-        if (!result.ok) return { users: [], error: `API error: ${result.status}` };
+        if (!result.ok) return { users: [], error: `API error: ${result.status}`, rawResponse: result.data };
         const data = result.data as Record<string, unknown>;
         const users = (data.users ?? []) as Array<Record<string, unknown>>;
         return {
@@ -240,6 +240,15 @@ const plugin: PaperclipPlugin = definePlugin({
         const projects = await ctx.projects.list({ companyId, limit: 200, offset: 0 });
         return { projects: projects.map((p) => ({ id: p.id, name: p.name, status: p.status })) };
       } catch (e) { return { projects: [], error: String(e) }; }
+    });
+
+    ctx.data.register("zoho-api-debug", async (params) => {
+      try {
+        const path = params.path as string;
+        if (!path) return { error: "path is required" };
+        const result = await projectsFetch(ctx, "GET", path);
+        return { status: result.status, ok: result.ok, data: result.data };
+      } catch (e) { return { error: String(e) }; }
     });
 
     // ─── Services registry data handler ─────────────────────

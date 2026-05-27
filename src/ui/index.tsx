@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, type FormEvent, type CSSProperties, type ReactNode } from "react";
+import { useState, useCallback, useEffect, useRef, type CSSProperties } from "react";
 import {
   usePluginAction,
   usePluginData,
@@ -8,26 +8,20 @@ import {
 // ─── Styles ─────────────────────────────────────────────────────────────────
 
 const btn: CSSProperties = {
-  appearance: "none",
-  border: "1px solid var(--border)",
-  borderRadius: "999px",
-  background: "transparent",
-  color: "inherit",
-  padding: "6px 14px",
-  fontSize: "12px",
-  cursor: "pointer",
+  appearance: "none", border: "1px solid var(--border)", borderRadius: "999px",
+  background: "transparent", color: "inherit", padding: "6px 14px", fontSize: "12px", cursor: "pointer",
 };
 const btnPrimary: CSSProperties = { ...btn, background: "var(--foreground)", color: "var(--background)", borderColor: "var(--foreground)" };
 const btnDanger: CSSProperties = { ...btn, color: "var(--destructive, #dc2626)", borderColor: "var(--destructive, #dc2626)" };
-const btnSmallDanger: CSSProperties = { ...btnDanger, padding: "4px 10px", fontSize: "11px" };
 const btnSmall: CSSProperties = { ...btn, padding: "4px 10px", fontSize: "11px" };
+const btnSmallDanger: CSSProperties = { ...btnDanger, padding: "4px 10px", fontSize: "11px" };
 
 const input: CSSProperties = {
   flex: 1, border: "1px solid var(--border)", borderRadius: "8px",
   padding: "8px 10px", background: "transparent", color: "inherit", fontSize: "12px", minWidth: 0,
 };
-const select: CSSProperties = {
-  ...input, flex: "none", minWidth: 180, cursor: "pointer",
+const selectStyle: CSSProperties = {
+  ...input, flex: 1, cursor: "pointer", minWidth: 160,
 };
 
 const section: CSSProperties = { marginBottom: "1.5rem", borderBottom: "1px solid var(--border)", paddingBottom: "1.25rem" };
@@ -50,15 +44,18 @@ const badgeStyle = (active: boolean): CSSProperties => ({
   background: active ? "var(--success, #22c55e)" : "var(--muted, #666)",
   color: "#fff", textTransform: "uppercase", letterSpacing: "0.5px",
 });
-
-// ─── Service Definitions ────────────────────────────────────────────────────
-
-type ServiceDef = {
-  type: string;
-  name: string;
-  description: string;
-  status: "available" | "coming-soon";
+const subsectionStyle: CSSProperties = {
+  marginLeft: "1rem", paddingLeft: "1rem", borderLeft: "2px solid var(--border)", marginBottom: "1rem",
 };
+
+// ─── Types ──────────────────────────────────────────────────────────────────
+
+type ServiceDef = { type: string; name: string; description: string; status: "available" | "coming-soon" };
+type ServiceRecord = { id: string; type: string; name: string; enabled: boolean; createdAt: string };
+type ConnectionStatus = { connected: boolean; dataCenter: string; connectedUser?: string; tokenExpiresAt?: number; tokenValid: boolean };
+type ConnectUrlData = { connectUrl: string; configured: boolean };
+type IdName = { id: string; name: string };
+type ZohoProject = { id: string; name: string; status: string; group: IdName | null; clientCompany: IdName | null };
 
 const AVAILABLE_SERVICES: ServiceDef[] = [
   { type: "zoho-projects", name: "Zoho Projects", description: "Bidirectional project and task sync", status: "available" },
@@ -70,72 +67,46 @@ const AVAILABLE_SERVICES: ServiceDef[] = [
   { type: "notion", name: "Notion", description: "Database and checklist sync", status: "coming-soon" },
 ];
 
-type ServiceRecord = { id: string; type: string; name: string; enabled: boolean; createdAt: string };
+// ─── Helper: extract company prefix from project name ───────────────────────
 
-type ConnectionStatus = {
-  connected: boolean;
-  dataCenter: string;
-  connectedUser?: string;
-  tokenExpiresAt?: number;
-  tokenValid: boolean;
-};
+function extractCompanyPrefix(projectName: string): string {
+  if (projectName.includes(" - ")) return projectName.split(" - ")[0].trim();
+  return "";
+}
 
-// ─── Mapping Row Helpers ────────────────────────────────────────────────────
-
-function MappingTable<T extends Record<string, string>>({
-  rows, setRows, fields, emptyRow,
-}: {
-  rows: T[];
-  setRows: (r: T[]) => void;
-  fields: Array<{ key: keyof T; placeholder: string }>;
-  emptyRow: T;
-}) {
-  return (
-    <>
-      {rows.map((r, i) => (
-        <div key={i} style={row}>
-          {fields.map((f) => (
-            <input
-              key={f.key as string}
-              style={input}
-              placeholder={f.placeholder}
-              value={r[f.key]}
-              onChange={(e) => {
-                const next = [...rows];
-                next[i] = { ...next[i], [f.key]: e.target.value };
-                setRows(next);
-              }}
-            />
-          ))}
-          <button type="button" style={btnSmallDanger} onClick={() => {
-            if (rows.length > 1) setRows(rows.filter((_, j) => j !== i));
-          }} title="Remove">x</button>
-        </div>
-      ))}
-      <div style={btnGroup}>
-        <button type="button" style={btnSmall} onClick={() => setRows([...rows, { ...emptyRow }])}>+ Add</button>
-      </div>
-    </>
-  );
+function getUniqueCompanyPrefixes(projects: ZohoProject[]): string[] {
+  const prefixes = new Set<string>();
+  for (const p of projects) {
+    const prefix = extractCompanyPrefix(p.name);
+    if (prefix) prefixes.add(prefix);
+  }
+  return Array.from(prefixes).sort();
 }
 
 // ─── Zoho Projects Service Config ───────────────────────────────────────────
 
-type ConnectUrlData = { connectUrl: string; configured: boolean };
+type OrgMapping = { zohoCompany: string; paperclipCompanyId: string };
+type AgentMapping = { zohoName: string; paperclipAgentId: string; org: string };
+type ProjectMapping = { zohoProjectId: string; zohoProjectName: string; paperclipProjectId: string; org: string };
 
 function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
   const { data: status, refresh } = usePluginData<ConnectionStatus>("connection-status");
   const { data: connectData } = usePluginData<ConnectUrlData>("connect-url");
+  const { data: zohoProjectsData } = usePluginData<{ projects: ZohoProject[] }>("zoho-projects-list", { portalId: "60418044" });
+  const { data: paperclipCompaniesData } = usePluginData<{ companies: IdName[] }>("paperclip-companies");
+  const disconnectAction = usePluginAction("disconnect");
   const saveGroupMapping = usePluginAction("save-group-mapping");
   const saveAgentMapping = usePluginAction("save-agent-mapping");
   const saveProjectMapping = usePluginAction("save-project-mapping");
-  const disconnectAction = usePluginAction("disconnect");
 
-  const [groupRows, setGroupRows] = useState([{ groupName: "", companyId: "" }]);
-  const [agentRows, setAgentRows] = useState([{ zohoName: "", paperclipAgentId: "" }]);
-  const [projectRows, setProjectRows] = useState([{ zohoProjectId: "", paperclipProjectId: "", paperclipCompanyId: "" }]);
+  const [orgMappings, setOrgMappings] = useState<OrgMapping[]>([]);
+  const [agentMappings, setAgentMappings] = useState<AgentMapping[]>([]);
+  const [projectMappings, setProjectMappings] = useState<ProjectMapping[]>([]);
+  const [addingOrg, setAddingOrg] = useState(false);
+  const [newOrgZoho, setNewOrgZoho] = useState("");
+  const [newOrgPaperclip, setNewOrgPaperclip] = useState("");
 
-  // Poll for connection status while disconnected (catches OAuth callback completion)
+  // Poll while disconnected
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     if (!status?.connected) {
@@ -154,10 +125,50 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
     }
   }, [disconnectAction, refresh]);
 
+  // Derived data
+  const zohoProjects = zohoProjectsData?.projects ?? [];
+  const zohoCompanyPrefixes = getUniqueCompanyPrefixes(zohoProjects);
+  const paperclipCompanies = paperclipCompaniesData?.companies ?? [];
+  const mappedZohoCompanies = new Set(orgMappings.map((m) => m.zohoCompany));
+  const unmappedZohoCompanies = zohoCompanyPrefixes.filter((c) => !mappedZohoCompanies.has(c));
+  const mappedPaperclipCompanyIds = new Set(orgMappings.map((m) => m.paperclipCompanyId));
+
+  // Auto-save org mapping
+  const saveOrgs = useCallback(async (mappings: OrgMapping[]) => {
+    await saveGroupMapping({
+      mapping: mappings.map((m) => ({ groupName: m.zohoCompany, companyId: m.paperclipCompanyId })),
+    });
+  }, [saveGroupMapping]);
+
+  const handleAddOrg = useCallback(async () => {
+    if (!newOrgZoho || !newOrgPaperclip) return;
+    const updated = [...orgMappings, { zohoCompany: newOrgZoho, paperclipCompanyId: newOrgPaperclip }];
+    setOrgMappings(updated);
+    setAddingOrg(false);
+    setNewOrgZoho("");
+    setNewOrgPaperclip("");
+    await saveOrgs(updated);
+  }, [newOrgZoho, newOrgPaperclip, orgMappings, saveOrgs]);
+
+  const handleRemoveOrg = useCallback(async (zohoCompany: string) => {
+    const updated = orgMappings.filter((m) => m.zohoCompany !== zohoCompany);
+    setOrgMappings(updated);
+    // Also remove agent/project mappings for this org
+    setAgentMappings((prev) => prev.filter((a) => a.org !== zohoCompany));
+    setProjectMappings((prev) => prev.filter((p) => p.org !== zohoCompany));
+    await saveOrgs(updated);
+  }, [orgMappings, saveOrgs]);
+
+  // Get Paperclip company name by ID
+  const getCompanyName = (id: string) => paperclipCompanies.find((c) => c.id === id)?.name ?? id;
+
+  // Get Zoho projects for a specific org
+  const getProjectsForOrg = (org: string) => zohoProjects.filter((p) => extractCompanyPrefix(p.name) === org);
+
   return (
     <div style={{ marginTop: "0.5rem" }}>
-      {/* Connection */}
-      <div style={{ ...section, paddingTop: "0.5rem" }}>
+      {/* ─── Connection ─────────────────────────────────────── */}
+      <div style={section}>
         <h4 style={{ marginTop: 0 }}>Connection</h4>
         {status?.connected ? (
           <>
@@ -191,7 +202,7 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
                 </a>
               ) : (
                 <button type="button" style={{ ...btnPrimary, opacity: 0.5, cursor: "not-allowed" }} disabled>
-                  Connect to Zoho (configure OAuth Callback URL first)
+                  Connect to Zoho (configure callback URL first)
                 </button>
               )}
             </div>
@@ -199,67 +210,111 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
         )}
       </div>
 
-      {/* Organization Mapping */}
-      <div style={section}>
-        <h4 style={{ marginTop: 0 }}>Organization Mapping</h4>
-        <p style={muted}>Map Zoho Project Group names to Paperclip Companies.</p>
-        <form onSubmit={async (e: FormEvent) => { e.preventDefault(); await saveGroupMapping({ mapping: groupRows.filter((r) => r.groupName && r.companyId) }); }}>
-          <MappingTable
-            rows={groupRows} setRows={setGroupRows}
-            fields={[{ key: "groupName", placeholder: "Zoho Project Group" }, { key: "companyId", placeholder: "Paperclip Company ID" }]}
-            emptyRow={{ groupName: "", companyId: "" }}
-          />
-          <div style={{ marginTop: "0.5rem" }}>
-            <button type="submit" style={btnPrimary}>Save Mappings</button>
-          </div>
-        </form>
-      </div>
+      {/* ─── Mappings (gated on connection) ─────────────────── */}
+      {status?.connected && (
+        <>
+          {/* Organization Mapping */}
+          <div style={section}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+              <h4 style={{ margin: 0 }}>Organization Mapping</h4>
+              {!addingOrg && unmappedZohoCompanies.length > 0 && (
+                <button type="button" style={btnSmall} onClick={() => setAddingOrg(true)}>+ Add</button>
+              )}
+            </div>
+            <p style={muted}>Map Zoho client companies to Paperclip organizations.</p>
 
-      {/* Agent Mapping */}
-      <div style={section}>
-        <h4 style={{ marginTop: 0 }}>Agent Mapping</h4>
-        <p style={muted}>Map Zoho user display names to Paperclip agent IDs. Agents are also auto-matched by name.</p>
-        <form onSubmit={async (e: FormEvent) => { e.preventDefault(); await saveAgentMapping({ mapping: agentRows.filter((r) => r.zohoName && r.paperclipAgentId) }); }}>
-          <MappingTable
-            rows={agentRows} setRows={setAgentRows}
-            fields={[{ key: "zohoName", placeholder: "Zoho Name" }, { key: "paperclipAgentId", placeholder: "Paperclip Agent ID" }]}
-            emptyRow={{ zohoName: "", paperclipAgentId: "" }}
-          />
-          <div style={{ marginTop: "0.5rem" }}>
-            <button type="submit" style={btnPrimary}>Save Mappings</button>
-          </div>
-        </form>
-      </div>
+            {/* Existing org mappings */}
+            {orgMappings.map((mapping) => (
+              <div key={mapping.zohoCompany} style={{ marginBottom: "1.25rem" }}>
+                <div style={row}>
+                  <span style={{ flex: 1, fontSize: "13px" }}><strong>{mapping.zohoCompany}</strong> (Zoho)</span>
+                  <span style={muted}>→</span>
+                  <span style={{ flex: 1, fontSize: "13px" }}><strong>{getCompanyName(mapping.paperclipCompanyId)}</strong> (Paperclip)</span>
+                  <button type="button" style={btnSmallDanger} onClick={() => handleRemoveOrg(mapping.zohoCompany)} title="Remove">x</button>
+                </div>
 
-      {/* Project Mapping */}
-      <div style={{ marginBottom: "0.5rem" }}>
-        <h4 style={{ marginTop: 0 }}>Project Mapping (Manual Override)</h4>
-        <p style={muted}>Override automatic project linking. Projects are auto-linked by name when possible.</p>
-        <form onSubmit={async (e: FormEvent) => { e.preventDefault(); await saveProjectMapping({ mapping: projectRows.filter((r) => r.zohoProjectId && r.paperclipProjectId && r.paperclipCompanyId) }); }}>
-          <MappingTable
-            rows={projectRows} setRows={setProjectRows}
-            fields={[
-              { key: "zohoProjectId", placeholder: "Zoho Project ID" },
-              { key: "paperclipProjectId", placeholder: "Paperclip Project ID" },
-              { key: "paperclipCompanyId", placeholder: "Paperclip Company ID" },
-            ]}
-            emptyRow={{ zohoProjectId: "", paperclipProjectId: "", paperclipCompanyId: "" }}
-          />
-          <div style={{ marginTop: "0.5rem" }}>
-            <button type="submit" style={btnPrimary}>Save Mappings</button>
+                {/* Nested: Projects for this org */}
+                <div style={subsectionStyle}>
+                  <p style={{ ...muted, marginBottom: "0.5rem", marginTop: "0.25rem" }}>
+                    <strong>Projects</strong> — {getProjectsForOrg(mapping.zohoCompany).length} Zoho projects in this organization
+                  </p>
+                  {getProjectsForOrg(mapping.zohoCompany).map((zp) => {
+                    const existing = projectMappings.find((pm) => pm.zohoProjectId === zp.id);
+                    return (
+                      <div key={zp.id} style={{ ...row, fontSize: "12px" }}>
+                        <span style={{ flex: 1 }}>{zp.name}</span>
+                        <span style={muted}>→</span>
+                        <span style={{ flex: 1, color: existing ? "inherit" : "var(--muted-foreground, #888)" }}>
+                          {existing ? existing.zohoProjectName : "(auto-link by name)"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  {getProjectsForOrg(mapping.zohoCompany).length === 0 && (
+                    <p style={muted}>No projects found for this organization.</p>
+                  )}
+                </div>
+              </div>
+            ))}
+
+            {/* Add org mapping */}
+            {addingOrg && (
+              <div style={{ ...cardStyle, padding: "0.75rem 1rem" }}>
+                <div style={row}>
+                  <select
+                    style={selectStyle}
+                    value={newOrgZoho}
+                    onChange={(e) => setNewOrgZoho(e.target.value)}
+                  >
+                    <option value="">Select Zoho company...</option>
+                    {unmappedZohoCompanies.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                  <span style={muted}>→</span>
+                  <select
+                    style={selectStyle}
+                    value={newOrgPaperclip}
+                    onChange={(e) => setNewOrgPaperclip(e.target.value)}
+                  >
+                    <option value="">Select Paperclip company...</option>
+                    {paperclipCompanies
+                      .filter((c) => !mappedPaperclipCompanyIds.has(c.id))
+                      .map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                  </select>
+                  <button type="button" style={btnPrimary} onClick={handleAddOrg} disabled={!newOrgZoho || !newOrgPaperclip}>
+                    Save
+                  </button>
+                  <button type="button" style={btn} onClick={() => { setAddingOrg(false); setNewOrgZoho(""); setNewOrgPaperclip(""); }}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {orgMappings.length === 0 && !addingOrg && (
+              <p style={muted}>
+                {zohoCompanyPrefixes.length > 0
+                  ? `${zohoCompanyPrefixes.length} Zoho companies detected. Click + Add to map them.`
+                  : "Connect to Zoho to detect companies from project names."
+                }
+              </p>
+            )}
           </div>
-        </form>
-      </div>
+        </>
+      )}
     </div>
   );
 }
 
-// ─── Placeholder Config for Coming-Soon Services ────────────────────────────
+// ─── Coming Soon ────────────────────────────────────────────────────────────
 
 function ComingSoonConfig({ serviceDef }: { serviceDef: ServiceDef }) {
   return (
     <div style={{ padding: "1rem 0" }}>
-      <p style={muted}>{serviceDef.description} — coming soon. This service is not yet available for configuration.</p>
+      <p style={muted}>{serviceDef.description} — coming soon.</p>
     </div>
   );
 }
@@ -268,6 +323,7 @@ function ComingSoonConfig({ serviceDef }: { serviceDef: ServiceDef }) {
 
 export function ProjectBridgeSettingsPage(_props: PluginSettingsPageProps) {
   const { data: services, refresh: refreshServices } = usePluginData<ServiceRecord[]>("services");
+  const { data: status } = usePluginData<ConnectionStatus>("connection-status");
   const addService = usePluginAction("add-service");
   const removeService = usePluginAction("remove-service");
   const [addingService, setAddingService] = useState(false);
@@ -293,10 +349,15 @@ export function ProjectBridgeSettingsPage(_props: PluginSettingsPageProps) {
   const serviceList = services ?? [];
   const configuredTypes = new Set(serviceList.map((s) => s.type));
 
+  // Determine button label for each service
+  const getServiceButtonLabel = (svc: ServiceRecord, isExpanded: boolean): string => {
+    if (isExpanded) return "Collapse";
+    if (svc.type === "zoho-projects" && status?.connected) return "Edit";
+    return "Setup";
+  };
+
   return (
     <div style={{ padding: "1.5rem", maxWidth: 850 }}>
-
-      {/* Connected Services */}
       <div style={section}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
           <h3 style={{ margin: 0 }}>Connected Services</h3>
@@ -305,11 +366,10 @@ export function ProjectBridgeSettingsPage(_props: PluginSettingsPageProps) {
           )}
         </div>
 
-        {/* Add Service Panel */}
         {addingService && (
           <div style={{ ...cardStyle, borderColor: "var(--border)" }}>
             <div style={row}>
-              <select style={select} value={selectedType} onChange={(e) => setSelectedType(e.target.value)}>
+              <select style={{ ...selectStyle, minWidth: 220 }} value={selectedType} onChange={(e) => setSelectedType(e.target.value)}>
                 <option value="">Select a service...</option>
                 {AVAILABLE_SERVICES.map((s) => (
                   <option key={s.type} value={s.type} disabled={configuredTypes.has(s.type)}>
@@ -332,51 +392,45 @@ export function ProjectBridgeSettingsPage(_props: PluginSettingsPageProps) {
           <p style={muted}>No services connected yet. Add a service to start syncing projects and tasks.</p>
         )}
 
-      {serviceList.map((svc) => {
-        const def = AVAILABLE_SERVICES.find((d) => d.type === svc.type);
-        const isExpanded = expandedService === svc.id;
+        {serviceList.map((svc) => {
+          const def = AVAILABLE_SERVICES.find((d) => d.type === svc.type);
+          const isExpanded = expandedService === svc.id;
+          const isConnected = svc.type === "zoho-projects" && status?.connected;
 
-        return (
-          <div key={svc.id} style={cardStyle}>
-            <div style={cardHeaderStyle}>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                <strong style={{ fontSize: "14px" }}>{svc.name}</strong>
-                <span style={badgeStyle(svc.enabled)}>
-                  {def?.status === "coming-soon" ? "Coming Soon" : svc.enabled ? "Active" : "Disabled"}
-                </span>
+          return (
+            <div key={svc.id} style={cardStyle}>
+              <div style={cardHeaderStyle}>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                  {svc.type === "zoho-projects" && <span style={dot(!!isConnected)} />}
+                  <strong style={{ fontSize: "14px" }}>{svc.name}</strong>
+                  <span style={badgeStyle(def?.status !== "coming-soon" && !!isConnected)}>
+                    {def?.status === "coming-soon" ? "Coming Soon" : isConnected ? "Connected" : "Not Connected"}
+                  </span>
+                </div>
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  <button type="button" style={btnSmall} onClick={() => setExpandedService(isExpanded ? null : svc.id)}>
+                    {getServiceButtonLabel(svc, isExpanded)}
+                  </button>
+                  <button type="button" style={btnSmallDanger} onClick={() => handleRemoveService(svc.id)}>
+                    Remove
+                  </button>
+                </div>
               </div>
-              <div style={{ display: "flex", gap: "0.5rem" }}>
-                <button
-                  type="button"
-                  style={btnSmall}
-                  onClick={() => setExpandedService(isExpanded ? null : svc.id)}
-                >
-                  {isExpanded ? "Collapse" : "Configure"}
-                </button>
-                <button
-                  type="button"
-                  style={btnSmallDanger}
-                  onClick={() => handleRemoveService(svc.id)}
-                >
-                  Remove
-                </button>
-              </div>
+
+              {!isExpanded && (
+                <p style={{ ...muted, margin: 0 }}>{def?.description ?? svc.type}</p>
+              )}
+
+              {isExpanded && (
+                def?.status === "coming-soon"
+                  ? <ComingSoonConfig serviceDef={def} />
+                  : svc.type === "zoho-projects"
+                    ? <ZohoProjectsConfig serviceId={svc.id} />
+                    : <ComingSoonConfig serviceDef={def ?? { type: svc.type, name: svc.name, description: "Unknown service", status: "coming-soon" }} />
+              )}
             </div>
-
-            {!isExpanded && (
-              <p style={{ ...muted, margin: 0 }}>{def?.description ?? svc.type}</p>
-            )}
-
-            {isExpanded && (
-              def?.status === "coming-soon"
-                ? <ComingSoonConfig serviceDef={def} />
-                : svc.type === "zoho-projects"
-                  ? <ZohoProjectsConfig serviceId={svc.id} />
-                  : <ComingSoonConfig serviceDef={def ?? { type: svc.type, name: svc.name, description: "Unknown service", status: "coming-soon" }} />
-            )}
-          </div>
-        );
-      })}
+          );
+        })}
       </div>
     </div>
   );

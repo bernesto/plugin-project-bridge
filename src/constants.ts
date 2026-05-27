@@ -36,6 +36,8 @@ export const ZOHO_SCOPES = [
   "ZohoProjects.tasks.ALL",
   "ZohoProjects.portals.READ",
   "ZohoProjects.projects.ALL",
+  "ZohoProjects.users.READ",
+  "ZohoProjects.clients.READ",
   "Desk.tickets.ALL",
   "Desk.tasks.ALL",
   "Desk.contacts.READ",
