@@ -233,6 +233,30 @@ const plugin: PaperclipPlugin = definePlugin({
       } catch (e) { return { agents: [], error: String(e) }; }
     });
 
+    ctx.data.register("paperclip-agents-by-company", async (params) => {
+      try {
+        const companyIds = (params.companyIds as string ?? "").split(",").filter(Boolean);
+        const result: Record<string, Array<{ id: string; name: string; role: string }>> = {};
+        for (const cid of companyIds) {
+          const agents = await ctx.agents.list({ companyId: cid, limit: 200, offset: 0 });
+          result[cid] = agents.map((a) => ({ id: a.id, name: a.name ?? "", role: a.role ?? "" }));
+        }
+        return { agentsByCompany: result };
+      } catch (e) { return { agentsByCompany: {}, error: String(e) }; }
+    });
+
+    ctx.data.register("paperclip-projects-by-company", async (params) => {
+      try {
+        const companyIds = (params.companyIds as string ?? "").split(",").filter(Boolean);
+        const result: Record<string, Array<{ id: string; name: string; status: string }>> = {};
+        for (const cid of companyIds) {
+          const projects = await ctx.projects.list({ companyId: cid, limit: 200, offset: 0 });
+          result[cid] = projects.map((p) => ({ id: p.id, name: p.name ?? "", status: p.status ?? "" }));
+        }
+        return { projectsByCompany: result };
+      } catch (e) { return { projectsByCompany: {}, error: String(e) }; }
+    });
+
     ctx.data.register("paperclip-projects-list", async (params) => {
       try {
         const companyId = params.companyId as string;

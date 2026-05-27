@@ -209,6 +209,15 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
   const [newOrgPaperclipId, setNewOrgPaperclipId] = useState("");
   const [newOrgPaperclipName, setNewOrgPaperclipName] = useState("");
 
+  // Fetch Paperclip agents and projects for all mapped companies
+  const mappedCompanyIds = orgMappings.map((m) => m.paperclipCompanyId).join(",");
+  const { data: agentsByCompanyData } = usePluginData<{ agentsByCompany: Record<string, Array<{ id: string; name: string; role: string }>> }>(
+    "paperclip-agents-by-company", { companyIds: mappedCompanyIds || "none" }
+  );
+  const { data: projectsByCompanyData } = usePluginData<{ projectsByCompany: Record<string, Array<{ id: string; name: string; status: string }>> }>(
+    "paperclip-projects-by-company", { companyIds: mappedCompanyIds || "none" }
+  );
+
   // Poll while disconnected
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
@@ -272,18 +281,47 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
     await persistOrgs(updated);
   }, [orgMappings, persistOrgs]);
 
+  const agentsByCompany = agentsByCompanyData?.agentsByCompany ?? {};
+  const projectsByCompany = projectsByCompanyData?.projectsByCompany ?? {};
+
   // Get Zoho client users for an org
   const getUsersForOrg = (zohoCompanyId: string) => zohoClients.find((c) => c.id === zohoCompanyId)?.users ?? [];
 
   // Get Zoho projects for an org (by name prefix matching the company name)
   const getProjectsForOrg = (zohoCompanyName: string) => zohoProjects.filter((p) => extractCompanyPrefix(p.name) === zohoCompanyName);
 
-  // Get Paperclip agents for a company
-  const paperclipAgentOptions = useCallback((companyId: string): AutocompleteOption[] => {
-    // For now return empty — agents need to be fetched per-company
-    // TODO: use usePluginData("paperclip-agents", { companyId }) when we can call hooks dynamically
-    return [];
-  }, []);
+  // Get Paperclip agents for a mapped company as autocomplete options
+  const getAgentOptionsForCompany = (paperclipCompanyId: string): AutocompleteOption[] => {
+    const agents = agentsByCompany[paperclipCompanyId] ?? [];
+    const mappedAgentIds = new Set(agentMappings.map((a) => a.paperclipAgentId));
+    return agents
+      .filter((a) => !mappedAgentIds.has(a.id))
+      .map((a) => ({ id: a.id, label: a.name, sublabel: a.role }));
+  };
+
+  // Get Paperclip projects for a mapped company as autocomplete options
+  const getProjectOptionsForCompany = (paperclipCompanyId: string): AutocompleteOption[] => {
+    const projects = projectsByCompany[paperclipCompanyId] ?? [];
+    const mappedProjectIds = new Set(projectMappings.map((p) => p.paperclipProjectId));
+    return projects
+      .filter((p) => !mappedProjectIds.has(p.id))
+      .map((p) => ({ id: p.id, label: p.name }));
+  };
+
+  // Auto-save agent mappings
+  const persistAgents = useCallback(async (mappings: AgentMapping[]) => {
+    await saveAgentMapping({ mapping: mappings.map((m) => ({ zohoName: m.zohoName, zohoId: m.zohoUserId, paperclipAgentId: m.paperclipAgentId })) });
+  }, [saveAgentMapping]);
+
+  // Auto-save project mappings
+  const persistProjects = useCallback(async (mappings: ProjectMapping[]) => {
+    await saveProjectMapping({
+      mapping: mappings.map((m) => ({
+        zohoProjectId: m.zohoProjectId, zohoProjectName: m.zohoProjectName,
+        paperclipProjectId: m.paperclipProjectId, paperclipCompanyId: orgMappings.find((o) => o.zohoCompany === m.org)?.paperclipCompanyId ?? "",
+      })),
+    });
+  }, [saveProjectMapping, orgMappings]);
 
   return (
     <div style={{ marginTop: "0.5rem" }}>
@@ -351,7 +389,7 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
                 <button type="button" style={btnSmallDanger} onClick={() => handleRemoveOrg(mapping.zohoCompanyId)} title="Remove mapping">x</button>
               </div>
 
-              {/* Nested: Agents */}
+              {/* Nested: Agent Mapping */}
               <div style={subsectionStyle}>
                 <p style={{ ...muted, marginBottom: "0.5rem", marginTop: "0.25rem" }}>
                   <strong>Agents</strong> — {getUsersForOrg(mapping.zohoCompanyId).length} Zoho client users
@@ -360,11 +398,36 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
                   const existingAgent = agentMappings.find((am) => am.zohoUserId === zu.id);
                   return (
                     <div key={zu.id} style={{ ...row, fontSize: "12px" }}>
-                      <span style={{ flex: 1 }}>{zu.name} <span style={muted}>({zu.email})</span></span>
-                      <span style={muted}>→</span>
-                      <span style={{ flex: 1, color: existingAgent ? "inherit" : "var(--muted-foreground, #888)" }}>
-                        {existingAgent ? existingAgent.paperclipAgentName : "(auto-match by name)"}
+                      <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {zu.name} <span style={muted}>({zu.email})</span>
                       </span>
+                      <span style={muted}>→</span>
+                      {existingAgent ? (
+                        <>
+                          <span style={{ flex: 1 }}>{existingAgent.paperclipAgentName}</span>
+                          <button type="button" style={btnSmallDanger} onClick={async () => {
+                            const updated = agentMappings.filter((a) => a.zohoUserId !== zu.id);
+                            setAgentMappings(updated);
+                            await persistAgents(updated);
+                          }} title="Remove">x</button>
+                        </>
+                      ) : (
+                        <Autocomplete
+                          options={getAgentOptionsForCompany(mapping.paperclipCompanyId)}
+                          value=""
+                          onChange={async (agentId, agentName) => {
+                            if (!agentId) return;
+                            const updated = [...agentMappings, {
+                              zohoUserId: zu.id, zohoName: zu.name,
+                              paperclipAgentId: agentId, paperclipAgentName: agentName,
+                              org: mapping.zohoCompanyId,
+                            }];
+                            setAgentMappings(updated);
+                            await persistAgents(updated);
+                          }}
+                          placeholder="Search Paperclip agent..."
+                        />
+                      )}
                     </div>
                   );
                 })}
@@ -373,7 +436,7 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
                 )}
               </div>
 
-              {/* Nested: Projects */}
+              {/* Nested: Project Mapping */}
               <div style={subsectionStyle}>
                 <p style={{ ...muted, marginBottom: "0.5rem", marginTop: "0.25rem" }}>
                   <strong>Projects</strong> — {getProjectsForOrg(mapping.zohoCompany).length} Zoho projects
@@ -382,11 +445,36 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
                   const existing = projectMappings.find((pm) => pm.zohoProjectId === zp.id);
                   return (
                     <div key={zp.id} style={{ ...row, fontSize: "12px" }}>
-                      <span style={{ flex: 1 }}>{zp.name}</span>
-                      <span style={muted}>→</span>
-                      <span style={{ flex: 1, color: existing ? "inherit" : "var(--muted-foreground, #888)" }}>
-                        {existing ? existing.paperclipProjectName : "(auto-link by name)"}
+                      <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {zp.name}
                       </span>
+                      <span style={muted}>→</span>
+                      {existing ? (
+                        <>
+                          <span style={{ flex: 1 }}>{existing.paperclipProjectName}</span>
+                          <button type="button" style={btnSmallDanger} onClick={async () => {
+                            const updated = projectMappings.filter((p) => p.zohoProjectId !== zp.id);
+                            setProjectMappings(updated);
+                            await persistProjects(updated);
+                          }} title="Remove">x</button>
+                        </>
+                      ) : (
+                        <Autocomplete
+                          options={getProjectOptionsForCompany(mapping.paperclipCompanyId)}
+                          value=""
+                          onChange={async (projId, projName) => {
+                            if (!projId) return;
+                            const updated = [...projectMappings, {
+                              zohoProjectId: zp.id, zohoProjectName: zp.name,
+                              paperclipProjectId: projId, paperclipProjectName: projName,
+                              org: mapping.zohoCompany,
+                            }];
+                            setProjectMappings(updated);
+                            await persistProjects(updated);
+                          }}
+                          placeholder="Search Paperclip project..."
+                        />
+                      )}
                     </div>
                   );
                 })}
