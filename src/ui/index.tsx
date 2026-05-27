@@ -56,6 +56,7 @@ type ConnectionStatus = { connected: boolean; dataCenter: string; connectedUser?
 type ConnectUrlData = { connectUrl: string; configured: boolean };
 type IdName = { id: string; name: string };
 type ZohoProject = { id: string; name: string; status: string; group: IdName | null; clientCompany: IdName | null };
+type ZohoClient = { id: string; name: string; users: Array<{ id: string; name: string; email: string }> };
 
 const AVAILABLE_SERVICES: ServiceDef[] = [
   { type: "zoho-projects", name: "Zoho Projects", description: "Bidirectional project and task sync", status: "available" },
@@ -92,6 +93,7 @@ type ProjectMapping = { zohoProjectId: string; zohoProjectName: string; papercli
 function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
   const { data: status, refresh } = usePluginData<ConnectionStatus>("connection-status");
   const { data: connectData } = usePluginData<ConnectUrlData>("connect-url");
+  const { data: zohoClientsData } = usePluginData<{ clients: ZohoClient[] }>("zoho-clients-list", { portalId: "60418044" });
   const { data: zohoProjectsData } = usePluginData<{ projects: ZohoProject[] }>("zoho-projects-list", { portalId: "60418044" });
   const { data: paperclipCompaniesData } = usePluginData<{ companies: IdName[] }>("paperclip-companies");
   const disconnectAction = usePluginAction("disconnect");
@@ -126,11 +128,11 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
   }, [disconnectAction, refresh]);
 
   // Derived data
+  const zohoClients = zohoClientsData?.clients ?? [];
   const zohoProjects = zohoProjectsData?.projects ?? [];
-  const zohoCompanyPrefixes = getUniqueCompanyPrefixes(zohoProjects);
   const paperclipCompanies = paperclipCompaniesData?.companies ?? [];
   const mappedZohoCompanies = new Set(orgMappings.map((m) => m.zohoCompany));
-  const unmappedZohoCompanies = zohoCompanyPrefixes.filter((c) => !mappedZohoCompanies.has(c));
+  const unmappedZohoClients = zohoClients.filter((c) => !mappedZohoCompanies.has(c.name));
   const mappedPaperclipCompanyIds = new Set(orgMappings.map((m) => m.paperclipCompanyId));
 
   // Auto-save org mapping
@@ -162,8 +164,20 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
   // Get Paperclip company name by ID
   const getCompanyName = (id: string) => paperclipCompanies.find((c) => c.id === id)?.name ?? id;
 
-  // Get Zoho projects for a specific org
+  // Get Zoho projects for a specific org (by name prefix)
   const getProjectsForOrg = (org: string) => zohoProjects.filter((p) => extractCompanyPrefix(p.name) === org);
+
+  // Get Zoho client users for a specific org
+  const getUsersForOrg = (org: string) => zohoClients.find((c) => c.name === org)?.users ?? [];
+
+  // Get Paperclip agents for a company
+  const [agentsByCompany, setAgentsByCompany] = useState<Record<string, IdName[]>>({});
+  const loadAgentsForCompany = useCallback(async (companyId: string) => {
+    // This is a simple cache — only fetch once per company
+    if (agentsByCompany[companyId]) return;
+    // We can't call usePluginData conditionally, so we use the action pattern
+    // For now, agents will be loaded via a separate data call
+  }, [agentsByCompany]);
 
   return (
     <div style={{ marginTop: "0.5rem" }}>
@@ -217,7 +231,7 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
           <div style={section}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
               <h4 style={{ margin: 0 }}>Organization Mapping</h4>
-              {!addingOrg && unmappedZohoCompanies.length > 0 && (
+              {!addingOrg && unmappedZohoClients.length > 0 && (
                 <button type="button" style={btnSmall} onClick={() => setAddingOrg(true)}>+ Add</button>
               )}
             </div>
@@ -233,10 +247,32 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
                   <button type="button" style={btnSmallDanger} onClick={() => handleRemoveOrg(mapping.zohoCompany)} title="Remove">x</button>
                 </div>
 
+                {/* Nested: Agents for this org */}
+                <div style={subsectionStyle}>
+                  <p style={{ ...muted, marginBottom: "0.5rem", marginTop: "0.25rem" }}>
+                    <strong>Agents</strong> — {getUsersForOrg(mapping.zohoCompany).length} Zoho client users
+                  </p>
+                  {getUsersForOrg(mapping.zohoCompany).map((zu) => {
+                    const existingAgent = agentMappings.find((am) => am.zohoName === zu.name && am.org === mapping.zohoCompany);
+                    return (
+                      <div key={zu.id} style={{ ...row, fontSize: "12px" }}>
+                        <span style={{ flex: 1 }}>{zu.name} <span style={muted}>({zu.email})</span></span>
+                        <span style={muted}>→</span>
+                        <span style={{ flex: 1, color: existingAgent ? "inherit" : "var(--muted-foreground, #888)" }}>
+                          {existingAgent ? existingAgent.paperclipAgentId : "(auto-match by name)"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  {getUsersForOrg(mapping.zohoCompany).length === 0 && (
+                    <p style={muted}>No client users found. Users are loaded from the Zoho client company.</p>
+                  )}
+                </div>
+
                 {/* Nested: Projects for this org */}
                 <div style={subsectionStyle}>
                   <p style={{ ...muted, marginBottom: "0.5rem", marginTop: "0.25rem" }}>
-                    <strong>Projects</strong> — {getProjectsForOrg(mapping.zohoCompany).length} Zoho projects in this organization
+                    <strong>Projects</strong> — {getProjectsForOrg(mapping.zohoCompany).length} Zoho projects
                   </p>
                   {getProjectsForOrg(mapping.zohoCompany).map((zp) => {
                     const existing = projectMappings.find((pm) => pm.zohoProjectId === zp.id);
@@ -266,9 +302,9 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
                     value={newOrgZoho}
                     onChange={(e) => setNewOrgZoho(e.target.value)}
                   >
-                    <option value="">Select Zoho company...</option>
-                    {unmappedZohoCompanies.map((c) => (
-                      <option key={c} value={c}>{c}</option>
+                    <option value="">Select Zoho client company...</option>
+                    {unmappedZohoClients.map((c) => (
+                      <option key={c.id} value={c.name}>{c.name}</option>
                     ))}
                   </select>
                   <span style={muted}>→</span>
@@ -296,9 +332,9 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
 
             {orgMappings.length === 0 && !addingOrg && (
               <p style={muted}>
-                {zohoCompanyPrefixes.length > 0
-                  ? `${zohoCompanyPrefixes.length} Zoho companies detected. Click + Add to map them.`
-                  : "Connect to Zoho to detect companies from project names."
+                {zohoClients.length > 0
+                  ? `${zohoClients.length} Zoho client companies found. Click + Add to map them to Paperclip organizations.`
+                  : "Loading Zoho client companies..."
                 }
               </p>
             )}
@@ -323,12 +359,19 @@ function ComingSoonConfig({ serviceDef }: { serviceDef: ServiceDef }) {
 
 export function ProjectBridgeSettingsPage(_props: PluginSettingsPageProps) {
   const { data: services, refresh: refreshServices } = usePluginData<ServiceRecord[]>("services");
-  const { data: status } = usePluginData<ConnectionStatus>("connection-status");
+  const { data: status, refresh: refreshStatus } = usePluginData<ConnectionStatus>("connection-status");
   const addService = usePluginAction("add-service");
   const removeService = usePluginAction("remove-service");
   const [addingService, setAddingService] = useState(false);
   const [selectedType, setSelectedType] = useState("");
   const [expandedService, setExpandedService] = useState<string | null>(null);
+
+  // Poll connection status every 3s so badge updates after connect/disconnect
+  const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    statusPollRef.current = setInterval(() => refreshStatus(), 3000);
+    return () => { if (statusPollRef.current) clearInterval(statusPollRef.current); };
+  }, [refreshStatus]);
 
   const handleAddService = useCallback(async () => {
     if (!selectedType) return;

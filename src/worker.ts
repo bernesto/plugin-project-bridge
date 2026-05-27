@@ -242,6 +242,29 @@ const plugin: PaperclipPlugin = definePlugin({
       } catch (e) { return { projects: [], error: String(e) }; }
     });
 
+    ctx.data.register("zoho-clients-list", async (params) => {
+      try {
+        const config = (await ctx.config.get()) as { portalId?: string };
+        const portalId = (params.portalId as string) || config.portalId;
+        if (!portalId) return { clients: [], error: "No portalId" };
+        const result = await projectsFetch(ctx, "GET", `/portal/${portalId}/clients/?range=100`);
+        if (!result.ok) return { clients: [], error: `API error: ${result.status}`, rawResponse: result.data };
+        const data = result.data as Record<string, unknown>;
+        const clients = (data.clients ?? []) as Array<Record<string, unknown>>;
+        return {
+          clients: clients.map((c) => ({
+            id: String(c.id ?? ""),
+            name: String(c.name ?? ""),
+            users: ((c.users ?? []) as Array<Record<string, unknown>>).map((u) => ({
+              id: String(u.id ?? u.zpuid ?? ""),
+              name: String(u.name ?? ""),
+              email: String(u.email ?? ""),
+            })),
+          })),
+        };
+      } catch (e) { return { clients: [], error: String(e) }; }
+    });
+
     ctx.data.register("zoho-api-debug", async (params) => {
       try {
         const path = params.path as string;
