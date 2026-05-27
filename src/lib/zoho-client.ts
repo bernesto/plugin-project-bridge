@@ -25,13 +25,13 @@ function getBaseUrl(service: ZohoService, dc: DataCenterKey): string {
     case "crm":
       return `https://${center.crm}/crm/v8`;
     case "projects":
-      return `https://${center.projects}/api/v3`;
+      return `https://${center.projects}/restapi`;
   }
 }
 
 function getAuthHeader(service: ZohoService, token: string): string {
   if (service === "projects") {
-    return `Bearer ${token}`;
+    return `Zoho-oauthtoken ${token}`;
   }
   return `Zoho-oauthtoken ${token}`;
 }

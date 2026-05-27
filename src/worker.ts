@@ -15,7 +15,7 @@ import {
 } from "@paperclipai/plugin-sdk";
 import { JOB_KEYS, WEBHOOK_KEYS, ZOHO_SCOPES } from "./constants.js";
 import type { ZohoAuthState } from "./lib/types.js";
-import { proactiveTokenRefresh } from "./lib/zoho-client.js";
+import { proactiveTokenRefresh, projectsFetch, zohoFetch } from "./lib/zoho-client.js";
 import { handleAgentEvent } from "./modules/provisioner/hermes-home.js";
 import { handleIssueUpdated } from "./modules/sync/outbound-sync.js";
 import { handleProjectsWebhook } from "./modules/sync/projects-handler.js";
@@ -162,6 +162,84 @@ const plugin: PaperclipPlugin = definePlugin({
           prompt: "consent",
         }).toString();
       return { connectUrl, configured: true };
+    });
+
+    // ─── Zoho API data handlers (for settings UI dropdowns) ──
+    ctx.data.register("zoho-portals", async () => {
+      try {
+        const result = await projectsFetch(ctx, "GET", "/portals/");
+        if (!result.ok) return { portals: [], error: `API error: ${result.status}`, rawResponse: result.data };
+        const data = result.data as Record<string, unknown>;
+        const portals = (data.portals ?? []) as Array<Record<string, unknown>>;
+        return { portals: portals.map((p) => ({ id: String(p.id ?? p.id_string ?? ""), name: String(p.name ?? "") })) };
+      } catch (e) { return { portals: [], error: String(e) }; }
+    });
+
+    ctx.data.register("zoho-projects-list", async (params) => {
+      try {
+        const config = (await ctx.config.get()) as { portalId?: string };
+        const portalId = (params.portalId as string) || config.portalId;
+        if (!portalId) return { projects: [], error: "No portalId" };
+        const result = await projectsFetch(ctx, "GET", `/portal/${portalId}/projects/?range=100&status=active`);
+        if (!result.ok) return { projects: [], error: `API error: ${result.status}` };
+        const data = result.data as Record<string, unknown>;
+        const projects = (data.projects ?? []) as Array<Record<string, unknown>>;
+        return {
+          projects: projects.map((p) => ({
+            id: String(p.id ?? p.id_string ?? ""),
+            name: String(p.name ?? ""),
+            status: String(p.status ?? ""),
+            group: p.group ? { id: String((p.group as Record<string, unknown>).id ?? ""), name: String((p.group as Record<string, unknown>).name ?? "") } : null,
+            clientCompany: p.company ? { id: String((p.company as Record<string, unknown>).id ?? ""), name: String((p.company as Record<string, unknown>).name ?? "") } : null,
+          })),
+        };
+      } catch (e) { return { projects: [], error: String(e) }; }
+    });
+
+    ctx.data.register("zoho-users-list", async (params) => {
+      try {
+        const config = (await ctx.config.get()) as { portalId?: string };
+        const portalId = (params.portalId as string) || config.portalId;
+        if (!portalId) return { users: [], error: "No portalId" };
+        const result = await projectsFetch(ctx, "GET", `/portal/${portalId}/users/?range=200&status=active`);
+        if (!result.ok) return { users: [], error: `API error: ${result.status}` };
+        const data = result.data as Record<string, unknown>;
+        const users = (data.users ?? []) as Array<Record<string, unknown>>;
+        return {
+          users: users.map((u) => ({
+            id: String(u.id ?? u.zpuid ?? ""),
+            name: String(u.name ?? ""),
+            email: String(u.email ?? ""),
+            role: String(u.role ?? ""),
+            company: u.company ? { id: String((u.company as Record<string, unknown>).id ?? ""), name: String((u.company as Record<string, unknown>).name ?? "") } : null,
+          })),
+        };
+      } catch (e) { return { users: [], error: String(e) }; }
+    });
+
+    ctx.data.register("paperclip-companies", async () => {
+      try {
+        const companies = await ctx.companies.list({ limit: 50, offset: 0 });
+        return { companies: companies.map((c) => ({ id: c.id, name: c.name })) };
+      } catch (e) { return { companies: [], error: String(e) }; }
+    });
+
+    ctx.data.register("paperclip-agents", async (params) => {
+      try {
+        const companyId = params.companyId as string;
+        if (!companyId) return { agents: [] };
+        const agents = await ctx.agents.list({ companyId, limit: 200, offset: 0 });
+        return { agents: agents.map((a) => ({ id: a.id, name: a.name, role: a.role })) };
+      } catch (e) { return { agents: [], error: String(e) }; }
+    });
+
+    ctx.data.register("paperclip-projects-list", async (params) => {
+      try {
+        const companyId = params.companyId as string;
+        if (!companyId) return { projects: [] };
+        const projects = await ctx.projects.list({ companyId, limit: 200, offset: 0 });
+        return { projects: projects.map((p) => ({ id: p.id, name: p.name, status: p.status })) };
+      } catch (e) { return { projects: [], error: String(e) }; }
     });
 
     // ─── Services registry data handler ─────────────────────
