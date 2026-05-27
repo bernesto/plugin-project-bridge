@@ -41,7 +41,6 @@ const manifest: PaperclipPluginManifestV1 = {
     "secrets.read-ref",
     "instance.settings.register",
     "ui.page.register",
-    "api.routes.register",
   ],
   entrypoints: {
     worker: "./dist/worker.js",
@@ -113,21 +112,10 @@ const manifest: PaperclipPluginManifestV1 = {
       displayName: "Zoho Desk",
       description: "Receives ticket events from Zoho Desk webhooks",
     },
-  ],
-  apiRoutes: [
     {
-      routeKey: "oauth-connect",
-      method: "GET",
-      path: "/connect",
-      auth: "board",
-      capability: "api.routes.register",
-    },
-    {
-      routeKey: "oauth-callback",
-      method: "GET",
-      path: "/callback",
-      auth: "board",
-      capability: "api.routes.register",
+      endpointKey: WEBHOOK_KEYS.oauthCallback,
+      displayName: "OAuth Callback",
+      description: "Receives OAuth authorization code from Zoho",
     },
   ],
   ui: {

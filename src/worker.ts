@@ -24,6 +24,76 @@ import { DATA_CENTERS } from "./constants.js";
 
 let currentContext: PluginContext | null = null;
 
+async function handleOAuthCallback(ctx: PluginContext, input: PluginWebhookInput): Promise<void> {
+  // The OAuth code comes in the webhook's parsed body or query params
+  // Zoho redirects with ?code=xxx which Paperclip passes as parsedBody for GET webhooks
+  const body = (input.parsedBody ?? {}) as Record<string, unknown>;
+  const rawBody = input.rawBody ?? "";
+
+  // Try to extract code from query string in rawBody, or from parsedBody
+  let code = body.code as string | undefined;
+  if (!code && rawBody.includes("code=")) {
+    const params = new URLSearchParams(rawBody);
+    code = params.get("code") ?? undefined;
+  }
+
+  if (!code) {
+    ctx.logger.error("OAuth callback received without authorization code");
+    return;
+  }
+
+  const config = (await ctx.config.get()) as {
+    zohoClientId?: string;
+    zohoClientSecret?: string;
+    dataCenter?: DataCenterKey;
+    oauthCallbackUrl?: string;
+  };
+
+  if (!config.zohoClientId || !config.zohoClientSecret) {
+    ctx.logger.error("OAuth callback: missing client credentials in config");
+    return;
+  }
+
+  const dc = (config.dataCenter ?? "US") as DataCenterKey;
+  const center = DATA_CENTERS[dc] ?? DATA_CENTERS.US;
+  const redirectUri = config.oauthCallbackUrl ?? "";
+
+  const params = new URLSearchParams({
+    code,
+    client_id: config.zohoClientId,
+    client_secret: config.zohoClientSecret,
+    grant_type: "authorization_code",
+    ...(redirectUri ? { redirect_uri: redirectUri } : {}),
+  });
+
+  const res = await ctx.http.fetch(`https://${center.accounts}/oauth/v2/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params.toString(),
+  });
+
+  if (!res.ok) {
+    const errBody = await res.text();
+    ctx.logger.error(`OAuth token exchange failed (${res.status}): ${errBody}`);
+    return;
+  }
+
+  const data = (await res.json()) as { access_token?: string; refresh_token?: string; expires_in?: number };
+  if (!data.access_token || !data.refresh_token) {
+    ctx.logger.error("OAuth token exchange returned incomplete data");
+    return;
+  }
+
+  await ctx.state.set({ scopeKind: "instance", stateKey: "zoho.auth" }, {
+    refreshToken: data.refresh_token,
+    accessToken: data.access_token,
+    expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000 - 60_000,
+    dataCenter: dc,
+  } satisfies ZohoAuthState);
+
+  ctx.logger.info(`OAuth completed. Connected to Zoho (${dc})`);
+}
+
 async function getAuthState(ctx: PluginContext): Promise<ZohoAuthState | null> {
   return (await ctx.state.get({
     scopeKind: "instance",
@@ -76,11 +146,22 @@ const plugin: PaperclipPlugin = definePlugin({
     });
 
     ctx.data.register("connect-url", async () => {
-      const config = (await ctx.config.get()) as { oauthCallbackUrl?: string };
-      // Derive the connect URL from the callback URL by replacing /callback with /connect
-      const callbackUrl = config.oauthCallbackUrl ?? "";
-      const connectUrl = callbackUrl ? callbackUrl.replace(/\/callback\/?$/, "/connect") : "";
-      return { connectUrl, configured: !!callbackUrl };
+      const config = (await ctx.config.get()) as { zohoClientId?: string; dataCenter?: DataCenterKey; oauthCallbackUrl?: string };
+      if (!config.zohoClientId || !config.oauthCallbackUrl) {
+        return { connectUrl: "", configured: false };
+      }
+      const dc = (config.dataCenter ?? "US") as DataCenterKey;
+      const center = DATA_CENTERS[dc] ?? DATA_CENTERS.US;
+      const connectUrl = `https://${center.accounts}/oauth/v2/auth?` +
+        new URLSearchParams({
+          client_id: config.zohoClientId,
+          response_type: "code",
+          scope: ZOHO_SCOPES,
+          redirect_uri: config.oauthCallbackUrl,
+          access_type: "offline",
+          prompt: "consent",
+        }).toString();
+      return { connectUrl, configured: true };
     });
 
     // ─── Services registry data handler ─────────────────────
@@ -209,93 +290,13 @@ const plugin: PaperclipPlugin = definePlugin({
         ctx.logger.info("Desk webhook received — handler not yet implemented (Phase 2)");
         break;
 
+      case WEBHOOK_KEYS.oauthCallback:
+        await handleOAuthCallback(ctx, input);
+        break;
+
       default:
         throw new Error(`Unknown webhook endpoint: ${input.endpointKey}`);
     }
-  },
-
-  async onApiRequest(request) {
-    const ctx = currentContext;
-    if (!ctx) {
-      return { status: 500, body: "Plugin not initialized" };
-    }
-
-    const reqPath = request.path;
-    const query = request.query as Record<string, string | string[]>;
-
-    // OAuth callback
-    if (reqPath.endsWith("/callback")) {
-      const code = typeof query.code === "string" ? query.code : Array.isArray(query.code) ? query.code[0] : null;
-      if (!code) return { status: 400, body: "Missing authorization code" };
-
-      const config = (await ctx.config.get()) as { zohoClientId?: string; zohoClientSecret?: string; dataCenter?: DataCenterKey; oauthCallbackUrl?: string };
-      if (!config.zohoClientId || !config.zohoClientSecret) {
-        return { status: 400, body: "Missing Zoho Client ID or Secret in plugin config" };
-      }
-
-      const dc = (config.dataCenter ?? "US") as DataCenterKey;
-      const center = DATA_CENTERS[dc] ?? DATA_CENTERS.US;
-      const redirectUri = config.oauthCallbackUrl ?? "";
-
-      const params = new URLSearchParams({
-        code,
-        client_id: config.zohoClientId,
-        client_secret: config.zohoClientSecret,
-        grant_type: "authorization_code",
-        ...(redirectUri ? { redirect_uri: redirectUri } : {}),
-      });
-
-      const res = await ctx.http.fetch(`https://${center.accounts}/oauth/v2/token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: params.toString(),
-      });
-
-      if (!res.ok) {
-        const body = await res.text();
-        ctx.logger.error(`OAuth token exchange failed: ${body}`);
-        return { status: 500, body: `OAuth failed: ${body}` };
-      }
-
-      const data = (await res.json()) as { access_token?: string; refresh_token?: string; expires_in?: number };
-      if (!data.access_token || !data.refresh_token) {
-        return { status: 500, body: "Token exchange returned incomplete data" };
-      }
-
-      await ctx.state.set({ scopeKind: "instance", stateKey: "zoho.auth" }, {
-        refreshToken: data.refresh_token,
-        accessToken: data.access_token,
-        expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000 - 60_000,
-        dataCenter: dc,
-      } satisfies ZohoAuthState);
-
-      ctx.logger.info(`OAuth completed. Connected to Zoho (${dc})`);
-      return { status: 302, headers: { Location: "/settings" }, body: "Connected! Redirecting to settings..." };
-    }
-
-    // OAuth initiation
-    if (reqPath.endsWith("/connect")) {
-      const config = (await ctx.config.get()) as { zohoClientId?: string; dataCenter?: DataCenterKey; oauthCallbackUrl?: string };
-      if (!config.zohoClientId) return { status: 400, body: "Configure Zoho Client ID first" };
-      if (!config.oauthCallbackUrl) return { status: 400, body: "Configure OAuth Callback URL first (must match Zoho API Console redirect URI)" };
-
-      const dc = (config.dataCenter ?? "US") as DataCenterKey;
-      const center = DATA_CENTERS[dc] ?? DATA_CENTERS.US;
-
-      const authUrl = `https://${center.accounts}/oauth/v2/auth?` +
-        new URLSearchParams({
-          client_id: config.zohoClientId,
-          response_type: "code",
-          scope: ZOHO_SCOPES,
-          redirect_uri: config.oauthCallbackUrl,
-          access_type: "offline",
-          prompt: "consent",
-        }).toString();
-
-      return { status: 302, headers: { Location: authUrl }, body: "" };
-    }
-
-    return { status: 404, body: "Not found" };
   },
 
   async onShutdown() {

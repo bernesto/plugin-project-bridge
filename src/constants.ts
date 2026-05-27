@@ -16,6 +16,7 @@ export const JOB_KEYS = {
 export const WEBHOOK_KEYS = {
   projects: "zoho-projects",
   desk: "zoho-desk",
+  oauthCallback: "oauth-callback",
 } as const;
 
 /** Zoho data center configuration */
