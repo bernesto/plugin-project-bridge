@@ -86,12 +86,13 @@ function Autocomplete({
   const [focusIdx, setFocusIdx] = useState(-1);
   const wrapRef = useRef<HTMLDivElement>(null);
 
-  const filtered = query.length === 0
+  const filtered = (query.length === 0
     ? options
     : options.filter((o) =>
         o.label.toLowerCase().includes(query.toLowerCase()) ||
         (o.sublabel?.toLowerCase().includes(query.toLowerCase()) ?? false)
-      );
+      )
+  ).filter((o, i, arr) => arr.findIndex((x) => x.id === o.id) === i);
 
   // Close on outside click
   useEffect(() => {
@@ -132,7 +133,7 @@ function Autocomplete({
         placeholder={placeholder}
         value={query}
         disabled={disabled}
-        onChange={(e) => { setQuery(e.target.value); setOpen(true); setFocusIdx(-1); if (!e.target.value) onChange("", ""); }}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); setFocusIdx(-1); }}
         onFocus={() => setOpen(true)}
         onKeyDown={handleKeyDown}
       />
