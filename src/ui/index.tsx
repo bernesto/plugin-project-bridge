@@ -326,7 +326,19 @@ type ProjectMapping = { zohoProjectId: string; zohoProjectName: string; papercli
 
 function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
   const serviceDef = AVAILABLE_SERVICES.find((s) => s.type === "zoho-projects")!;
-  const { data: status } = usePluginData<ConnectionStatus>("connection-status", { serviceId });
+  const { data: status, refresh: refreshStatus } = usePluginData<ConnectionStatus>("connection-status", { serviceId });
+
+  // Poll connection status so mappings appear after OAuth completes
+  const parentPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (!status?.connected) {
+      parentPollRef.current = setInterval(() => refreshStatus(), 3000);
+    } else if (parentPollRef.current) {
+      clearInterval(parentPollRef.current);
+      parentPollRef.current = null;
+    }
+    return () => { if (parentPollRef.current) clearInterval(parentPollRef.current); };
+  }, [status?.connected, refreshStatus]);
   const { data: zohoClientsData, loading: clientsLoading, error: clientsError } = usePluginData<{ clients: ZohoClient[] }>("zoho-clients-list", { portalId: "60418044" });
   const { data: zohoProjectsData } = usePluginData<{ projects: ZohoProject[] }>("zoho-projects-list", { portalId: "60418044" });
   const { data: paperclipCompaniesData } = usePluginData<{ companies: IdName[] }>("paperclip-companies");
