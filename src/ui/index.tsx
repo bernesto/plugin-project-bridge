@@ -197,7 +197,7 @@ function Autocomplete({
 
 function OAuthSetup({ serviceId, serviceDef }: { serviceId: string; serviceDef: ServiceDef }) {
   const { data: status, refresh } = usePluginData<ConnectionStatus>("connection-status", { serviceId });
-  const { data: connectData } = usePluginData<ConnectUrlData>("connect-url", { serviceId, scopes: serviceDef.scopes ?? "" });
+  const { data: connectData, refresh: refreshConnectUrl } = usePluginData<ConnectUrlData>("connect-url", { serviceId, scopes: serviceDef.scopes ?? "" });
   const saveOAuthConfig = usePluginAction("save-service-oauth-config");
   const disconnectAction = usePluginAction("disconnect-service");
 
@@ -223,12 +223,17 @@ function OAuthSetup({ serviceId, serviceDef }: { serviceId: string; serviceDef: 
   const handleSaveConfig = useCallback(async () => {
     if (!clientId) return;
     setSaving(true);
-    await saveOAuthConfig({ serviceId, clientId, clientSecret, callbackUrl, dataCenter });
-    setConfigSaved(true);
-    setSaving(false);
-    // Refresh connect URL
-    refresh();
-  }, [serviceId, clientId, clientSecret, callbackUrl, dataCenter, saveOAuthConfig, refresh]);
+    try {
+      await saveOAuthConfig({ serviceId, clientId, clientSecret, callbackUrl, dataCenter });
+      setConfigSaved(true);
+      // Refresh connect URL after state propagates
+      setTimeout(() => { refresh(); refreshConnectUrl(); }, 500);
+    } catch (e) {
+      console.error("Failed to save OAuth config:", e);
+    } finally {
+      setSaving(false);
+    }
+  }, [serviceId, clientId, clientSecret, callbackUrl, dataCenter, saveOAuthConfig, refresh, refreshConnectUrl]);
 
   const handleDisconnect = useCallback(async () => {
     if (confirm("Disconnect this service? You will need to re-authenticate.")) {
@@ -297,7 +302,9 @@ function OAuthSetup({ serviceId, serviceDef }: { serviceId: string; serviceDef: 
             <button type="button" style={btnPrimary}>Connect to {serviceDef.name}</button>
           </a>
         ) : (
-          <button type="button" style={{ ...btnPrimary, opacity: 0.5 }} disabled>Saving configuration...</button>
+          <button type="button" style={btnPrimary} onClick={() => refresh()}>
+            Loading connect URL... (click to retry)
+          </button>
         )}
       </div>
     </div>
