@@ -192,7 +192,7 @@ type ProjectMapping = { zohoProjectId: string; zohoProjectName: string; papercli
 function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
   const { data: status, refresh } = usePluginData<ConnectionStatus>("connection-status");
   const { data: connectData } = usePluginData<ConnectUrlData>("connect-url");
-  const { data: zohoClientsData } = usePluginData<{ clients: ZohoClient[] }>("zoho-clients-list", { portalId: "60418044" });
+  const { data: zohoClientsData, loading: clientsLoading, error: clientsError } = usePluginData<{ clients: ZohoClient[] }>("zoho-clients-list", { portalId: "60418044" });
   const { data: zohoProjectsData } = usePluginData<{ projects: ZohoProject[] }>("zoho-projects-list", { portalId: "60418044" });
   const { data: paperclipCompaniesData } = usePluginData<{ companies: IdName[] }>("paperclip-companies");
   const disconnectAction = usePluginAction("disconnect");
@@ -516,12 +516,110 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
 
           {orgMappings.length === 0 && !addingOrg && (
             <p style={muted}>
-              {zohoClients.length > 0
-                ? `${zohoClients.length} Zoho client companies found. Click + Add to map them.`
-                : "Loading Zoho client companies..."
+              {clientsLoading
+                ? "Loading Zoho client companies..."
+                : clientsError
+                  ? `Error loading clients: ${clientsError.message}`
+                  : zohoClients.length > 0
+                    ? `${zohoClients.length} Zoho client companies found. Click + Add to map them.`
+                    : "No Zoho client companies found. Check your connection."
               }
             </p>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Plugin Config (Zoho credentials) ───────────────────────────────────────
+
+const PLUGIN_ID = "project-bridge";
+
+function hostFetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  return fetch(path, {
+    credentials: "include",
+    headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
+    ...init,
+  }).then(async (response) => {
+    if (!response.ok) throw new Error(await response.text() || `Request failed: ${response.status}`);
+    return await response.json() as T;
+  });
+}
+
+function usePluginConfig() {
+  const [config, setConfig] = useState<Record<string, unknown>>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    hostFetchJson<{ configJson?: Record<string, unknown> | null } | null>(`/api/plugins/${PLUGIN_ID}/config`)
+      .then((result) => { if (!cancelled) setConfig(result?.configJson ?? {}); })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const save = useCallback(async (next: Record<string, unknown>) => {
+    setSaving(true);
+    try {
+      await hostFetchJson(`/api/plugins/${PLUGIN_ID}/config`, {
+        method: "POST",
+        body: JSON.stringify({ configJson: next }),
+      });
+      setConfig(next);
+    } finally { setSaving(false); }
+  }, []);
+
+  return { config, setConfig, loading, saving, save };
+}
+
+function ZohoConfigSection() {
+  const { config, setConfig, loading, saving, save } = usePluginConfig();
+  const [dirty, setDirty] = useState(false);
+
+  const update = (key: string, value: string) => {
+    setConfig((prev) => ({ ...prev, [key]: value }));
+    setDirty(true);
+  };
+
+  const handleSave = async () => {
+    await save(config);
+    setDirty(false);
+  };
+
+  if (loading) return <p style={muted}>Loading configuration...</p>;
+
+  return (
+    <div style={section}>
+      <h3 style={{ margin: "0 0 0.5rem 0" }}>Zoho API Configuration</h3>
+      <p style={muted}>Credentials for the Zoho API Console Server-based Client. Each plugin needs its own client.</p>
+      <div style={{ display: "grid", gap: "0.5rem", marginTop: "0.75rem" }}>
+        <div style={row}>
+          <label style={{ width: 130, fontSize: "12px", flexShrink: 0 }}>Client ID</label>
+          <input style={inputStyle} value={(config.zohoClientId as string) ?? ""} onChange={(e) => update("zohoClientId", e.target.value)} placeholder="1000.XXXXXXXX..." />
+        </div>
+        <div style={row}>
+          <label style={{ width: 130, fontSize: "12px", flexShrink: 0 }}>Client Secret</label>
+          <input style={inputStyle} type="password" value={(config.zohoClientSecret as string) ?? ""} onChange={(e) => update("zohoClientSecret", e.target.value)} placeholder="Client secret" />
+        </div>
+        <div style={row}>
+          <label style={{ width: 130, fontSize: "12px", flexShrink: 0 }}>Callback URL</label>
+          <input style={inputStyle} value={(config.oauthCallbackUrl as string) ?? ""} onChange={(e) => update("oauthCallbackUrl", e.target.value)} placeholder="https://cortex.neoreef.com:8443/oauth/callback" />
+        </div>
+        <div style={row}>
+          <label style={{ width: 130, fontSize: "12px", flexShrink: 0 }}>Data Center</label>
+          <select style={{ ...selectStyle, flex: 0, minWidth: 100 }} value={(config.dataCenter as string) ?? "US"} onChange={(e) => update("dataCenter", e.target.value)}>
+            {["US", "EU", "IN", "AU", "JP", "CA"].map((dc) => <option key={dc} value={dc}>{dc}</option>)}
+          </select>
+        </div>
+      </div>
+      {dirty && (
+        <div style={btnGroup}>
+          <button type="button" style={btnPrimary} onClick={handleSave} disabled={saving}>
+            {saving ? "Saving..." : "Save Configuration"}
+          </button>
         </div>
       )}
     </div>
@@ -583,6 +681,8 @@ export function ProjectBridgeSettingsPage(_props: PluginSettingsPageProps) {
 
   return (
     <div style={{ padding: "1.5rem", maxWidth: 850 }}>
+      <ZohoConfigSection />
+
       <div style={section}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
           <h3 style={{ margin: 0 }}>Connected Services</h3>
