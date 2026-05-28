@@ -342,9 +342,6 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
   const { data: zohoClientsData, loading: clientsLoading, error: clientsError } = usePluginData<{ clients: ZohoClient[] }>("zoho-clients-list", { portalId: "60418044" });
   const { data: zohoProjectsData } = usePluginData<{ projects: ZohoProject[] }>("zoho-projects-list", { portalId: "60418044" });
   const { data: paperclipCompaniesData } = usePluginData<{ companies: IdName[] }>("paperclip-companies");
-  const saveGroupMapping = usePluginAction("save-group-mapping");
-  const saveAgentMapping = usePluginAction("save-agent-mapping");
-  const saveProjectMapping = usePluginAction("save-project-mapping");
 
   const [orgMappings, setOrgMappings] = useState<OrgMapping[]>([]);
   const [agentMappings, setAgentMappings] = useState<AgentMapping[]>([]);
@@ -364,6 +361,51 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
     "paperclip-projects-by-company", { companyIds: mappedCompanyIds || "none" }
   );
 
+  const [ignoredItems, setIgnoredItems] = useState<Array<{ type: string; zohoId: string; zohoName: string }>>([]);
+  const [dirty, setDirty] = useState(false);
+  const [savingAll, setSavingAll] = useState(false);
+
+  // Load saved mappings on mount
+  const { data: savedMappingsData } = usePluginData<{
+    orgMapping: OrgMapping[]; agentMapping: AgentMapping[];
+    projectMapping: ProjectMapping[]; ignoredItems: Array<{ type: string; zohoId: string; zohoName: string }>;
+  }>("saved-mappings");
+  const loadedRef = useRef(false);
+  useEffect(() => {
+    if (savedMappingsData && !loadedRef.current) {
+      loadedRef.current = true;
+      if (savedMappingsData.orgMapping?.length) setOrgMappings(savedMappingsData.orgMapping);
+      if (savedMappingsData.agentMapping?.length) setAgentMappings(savedMappingsData.agentMapping);
+      if (savedMappingsData.projectMapping?.length) setProjectMappings(savedMappingsData.projectMapping);
+      if (savedMappingsData.ignoredItems?.length) setIgnoredItems(savedMappingsData.ignoredItems);
+    }
+  }, [savedMappingsData]);
+
+  const saveAllMappings = usePluginAction("save-all-mappings");
+  const requestHireAgent = usePluginAction("request-agent-hire");
+
+  const handleSaveAll = useCallback(async () => {
+    setSavingAll(true);
+    try {
+      await saveAllMappings({ orgMapping: orgMappings, agentMapping: agentMappings, projectMapping: projectMappings, ignoredItems });
+      setDirty(false);
+    } catch (e) {
+      console.error("Failed to save mappings:", e);
+    } finally {
+      setSavingAll(false);
+    }
+  }, [orgMappings, agentMappings, projectMappings, ignoredItems, saveAllMappings]);
+
+  const handleRevert = useCallback(() => {
+    if (savedMappingsData) {
+      setOrgMappings(savedMappingsData.orgMapping ?? []);
+      setAgentMappings(savedMappingsData.agentMapping ?? []);
+      setProjectMappings(savedMappingsData.projectMapping ?? []);
+      setIgnoredItems(savedMappingsData.ignoredItems ?? []);
+    }
+    setDirty(false);
+  }, [savedMappingsData]);
+
   // Connection status polling is handled by OAuthSetup
 
   // Derived data
@@ -382,33 +424,26 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
     .filter((c) => !mappedPaperclipCompanyIds.has(c.id))
     .map((c) => ({ id: c.id, label: c.name }));
 
-  // Auto-save org mappings
-  const persistOrgs = useCallback(async (mappings: OrgMapping[]) => {
-    await saveGroupMapping({
-      mapping: mappings.map((m) => ({ groupName: m.zohoCompany, companyId: m.paperclipCompanyId })),
-    });
-  }, [saveGroupMapping]);
 
-  const handleAddOrg = useCallback(async () => {
+  const handleAddOrg = useCallback(() => {
     if (!newOrgZohoId || !newOrgPaperclipId) return;
-    const updated = [...orgMappings, {
+    setOrgMappings((prev) => [...prev, {
       zohoCompanyId: newOrgZohoId, zohoCompany: newOrgZohoName,
       paperclipCompanyId: newOrgPaperclipId, paperclipCompanyName: newOrgPaperclipName,
-    }];
-    setOrgMappings(updated);
+    }]);
     setAddingOrg(false);
     setNewOrgZohoId(""); setNewOrgZohoName("");
     setNewOrgPaperclipId(""); setNewOrgPaperclipName("");
-    await persistOrgs(updated);
-  }, [newOrgZohoId, newOrgZohoName, newOrgPaperclipId, newOrgPaperclipName, orgMappings, persistOrgs]);
+    setDirty(true);
+  }, [newOrgZohoId, newOrgZohoName, newOrgPaperclipId, newOrgPaperclipName]);
 
-  const handleRemoveOrg = useCallback(async (zohoCompanyId: string) => {
-    const updated = orgMappings.filter((m) => m.zohoCompanyId !== zohoCompanyId);
-    setOrgMappings(updated);
+  const handleRemoveOrg = useCallback((zohoCompanyId: string) => {
+    setOrgMappings((prev) => prev.filter((m) => m.zohoCompanyId !== zohoCompanyId));
     setAgentMappings((prev) => prev.filter((a) => a.org !== zohoCompanyId));
     setProjectMappings((prev) => prev.filter((p) => p.org !== zohoCompanyId));
-    await persistOrgs(updated);
-  }, [orgMappings, persistOrgs]);
+    setIgnoredItems((prev) => prev.filter((ig) => ig.zohoId !== zohoCompanyId));
+    setDirty(true);
+  }, []);
 
   const agentsByCompany = agentsByCompanyData?.agentsByCompany ?? {};
   const projectsByCompany = projectsByCompanyData?.projectsByCompany ?? {};
@@ -437,20 +472,6 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
       .map((p) => ({ id: p.id, label: p.name }));
   };
 
-  // Auto-save agent mappings
-  const persistAgents = useCallback(async (mappings: AgentMapping[]) => {
-    await saveAgentMapping({ mapping: mappings.map((m) => ({ zohoName: m.zohoName, zohoId: m.zohoUserId, paperclipAgentId: m.paperclipAgentId })) });
-  }, [saveAgentMapping]);
-
-  // Auto-save project mappings
-  const persistProjects = useCallback(async (mappings: ProjectMapping[]) => {
-    await saveProjectMapping({
-      mapping: mappings.map((m) => ({
-        zohoProjectId: m.zohoProjectId, zohoProjectName: m.zohoProjectName,
-        paperclipProjectId: m.paperclipProjectId, paperclipCompanyId: orgMappings.find((o) => o.zohoCompany === m.org)?.paperclipCompanyId ?? "",
-      })),
-    });
-  }, [saveProjectMapping, orgMappings]);
 
   return (
     <div style={{ marginTop: "0.5rem" }}>
@@ -485,36 +506,56 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
                 </p>
                 {getUsersForOrg(mapping.zohoCompanyId).map((zu) => {
                   const existingAgent = agentMappings.find((am) => am.zohoUserId === zu.id);
+                  const isIgnored = ignoredItems.some((ig) => ig.type === "agent" && ig.zohoId === zu.id);
                   return (
-                    <div key={zu.id} style={{ ...row, fontSize: "12px" }}>
+                    <div key={zu.id} style={{ ...row, fontSize: "12px", opacity: isIgnored ? 0.5 : 1 }}>
                       <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                         {zu.name} <span style={muted}>({zu.email})</span>
                       </span>
                       <span style={muted}>→</span>
-                      {existingAgent ? (
+                      {isIgnored ? (
+                        <>
+                          <span style={{ ...muted, flex: 1, fontStyle: "italic" }}>Ignored</span>
+                          <button type="button" style={btnSmallDanger} onClick={() => {
+                            setIgnoredItems((prev) => prev.filter((ig) => !(ig.type === "agent" && ig.zohoId === zu.id)));
+                            setDirty(true);
+                          }} title="Un-ignore">x</button>
+                        </>
+                      ) : existingAgent ? (
                         <>
                           <span style={{ flex: 1 }}>{existingAgent.paperclipAgentName}</span>
-                          <button type="button" style={btnSmallDanger} onClick={async () => {
-                            const updated = agentMappings.filter((a) => a.zohoUserId !== zu.id);
-                            setAgentMappings(updated);
-                            await persistAgents(updated);
+                          <button type="button" style={btnSmallDanger} onClick={() => {
+                            setAgentMappings((prev) => prev.filter((a) => a.zohoUserId !== zu.id));
+                            setDirty(true);
                           }} title="Remove">x</button>
                         </>
                       ) : (
                         <Autocomplete
-                          options={getAgentOptionsForCompany(mapping.paperclipCompanyId)}
+                          options={[
+                            { id: "__hire__", label: "Hire agent...", sublabel: "Create CEO issue" },
+                            { id: "__ignore__", label: "Ignore", sublabel: "Skip this user" },
+                            ...getAgentOptionsForCompany(mapping.paperclipCompanyId),
+                          ]}
                           value=""
-                          onChange={async (agentId, agentName) => {
-                            if (!agentId) return;
-                            const updated = [...agentMappings, {
+                          onChange={(selectedId, selectedName) => {
+                            if (selectedId === "__hire__") {
+                              requestHireAgent({ agentName: zu.name, companyId: mapping.paperclipCompanyId });
+                              return;
+                            }
+                            if (selectedId === "__ignore__") {
+                              setIgnoredItems((prev) => [...prev, { type: "agent", zohoId: zu.id, zohoName: zu.name }]);
+                              setDirty(true);
+                              return;
+                            }
+                            if (!selectedId) return;
+                            setAgentMappings((prev) => [...prev, {
                               zohoUserId: zu.id, zohoName: zu.name,
-                              paperclipAgentId: agentId, paperclipAgentName: agentName,
+                              paperclipAgentId: selectedId, paperclipAgentName: selectedName,
                               org: mapping.zohoCompanyId,
-                            }];
-                            setAgentMappings(updated);
-                            await persistAgents(updated);
+                            }]);
+                            setDirty(true);
                           }}
-                          placeholder="Search Paperclip agent..."
+                          placeholder="Search agent, hire, or ignore..."
                         />
                       )}
                     </div>
@@ -532,36 +573,51 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
                 </p>
                 {getProjectsForOrg(mapping.zohoCompany).map((zp) => {
                   const existing = projectMappings.find((pm) => pm.zohoProjectId === zp.id);
+                  const isIgnored = ignoredItems.some((ig) => ig.type === "project" && ig.zohoId === zp.id);
                   return (
-                    <div key={zp.id} style={{ ...row, fontSize: "12px" }}>
+                    <div key={zp.id} style={{ ...row, fontSize: "12px", opacity: isIgnored ? 0.5 : 1 }}>
                       <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                         {zp.name}
                       </span>
                       <span style={muted}>→</span>
-                      {existing ? (
+                      {isIgnored ? (
+                        <>
+                          <span style={{ ...muted, flex: 1, fontStyle: "italic" }}>Ignored</span>
+                          <button type="button" style={btnSmallDanger} onClick={() => {
+                            setIgnoredItems((prev) => prev.filter((ig) => !(ig.type === "project" && ig.zohoId === zp.id)));
+                            setDirty(true);
+                          }} title="Un-ignore">x</button>
+                        </>
+                      ) : existing ? (
                         <>
                           <span style={{ flex: 1 }}>{existing.paperclipProjectName}</span>
-                          <button type="button" style={btnSmallDanger} onClick={async () => {
-                            const updated = projectMappings.filter((p) => p.zohoProjectId !== zp.id);
-                            setProjectMappings(updated);
-                            await persistProjects(updated);
+                          <button type="button" style={btnSmallDanger} onClick={() => {
+                            setProjectMappings((prev) => prev.filter((p) => p.zohoProjectId !== zp.id));
+                            setDirty(true);
                           }} title="Remove">x</button>
                         </>
                       ) : (
                         <Autocomplete
-                          options={getProjectOptionsForCompany(mapping.paperclipCompanyId)}
+                          options={[
+                            { id: "__ignore__", label: "Ignore", sublabel: "Skip this project" },
+                            ...getProjectOptionsForCompany(mapping.paperclipCompanyId),
+                          ]}
                           value=""
-                          onChange={async (projId, projName) => {
-                            if (!projId) return;
-                            const updated = [...projectMappings, {
+                          onChange={(selectedId, selectedName) => {
+                            if (selectedId === "__ignore__") {
+                              setIgnoredItems((prev) => [...prev, { type: "project", zohoId: zp.id, zohoName: zp.name }]);
+                              setDirty(true);
+                              return;
+                            }
+                            if (!selectedId) return;
+                            setProjectMappings((prev) => [...prev, {
                               zohoProjectId: zp.id, zohoProjectName: zp.name,
-                              paperclipProjectId: projId, paperclipProjectName: projName,
+                              paperclipProjectId: selectedId, paperclipProjectName: selectedName,
                               org: mapping.zohoCompany,
-                            }];
-                            setProjectMappings(updated);
-                            await persistProjects(updated);
+                            }]);
+                            setDirty(true);
                           }}
-                          placeholder="Search Paperclip project..."
+                          placeholder="Search project or ignore..."
                         />
                       )}
                     </div>
@@ -594,7 +650,7 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
               </div>
               <div style={btnGroup}>
                 <button type="button" style={btnPrimary} onClick={handleAddOrg} disabled={!newOrgZohoId || !newOrgPaperclipId}>
-                  Save
+                  Add Organization
                 </button>
                 <button type="button" style={btn} onClick={() => { setAddingOrg(false); setNewOrgZohoId(""); setNewOrgZohoName(""); setNewOrgPaperclipId(""); setNewOrgPaperclipName(""); }}>
                   Cancel
@@ -614,6 +670,16 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
                     : "No Zoho client companies found. Check your connection."
               }
             </p>
+          )}
+
+          {/* Save button */}
+          {dirty && (
+            <div style={{ ...btnGroup, borderTop: "1px solid var(--border)", paddingTop: "0.75rem", marginTop: "1rem" }}>
+              <button type="button" style={btnPrimary} onClick={handleSaveAll} disabled={savingAll}>
+                {savingAll ? "Saving..." : "Save All Mappings"}
+              </button>
+              <button type="button" style={btn} onClick={handleRevert}>Revert Changes</button>
+            </div>
           )}
         </div>
       )}

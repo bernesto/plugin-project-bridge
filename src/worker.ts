@@ -337,6 +337,15 @@ const plugin: PaperclipPlugin = definePlugin({
       } catch (e) { return { error: String(e) }; }
     });
 
+    // ─── Saved mappings data handler ─────────────────────────
+    ctx.data.register("saved-mappings", async () => {
+      const orgMapping = ((await ctx.state.get({ scopeKind: "instance", stateKey: "zoho.orgMapping" })) as any[] | null) ?? [];
+      const agentMapping = ((await ctx.state.get({ scopeKind: "instance", stateKey: "zoho.agentMapping" })) as any[] | null) ?? [];
+      const projectMapping = ((await ctx.state.get({ scopeKind: "instance", stateKey: "zoho.projectMapping" })) as any[] | null) ?? [];
+      const ignoredItems = ((await ctx.state.get({ scopeKind: "instance", stateKey: "zoho.ignoredItems" })) as any[] | null) ?? [];
+      return { orgMapping, agentMapping, projectMapping, ignoredItems };
+    });
+
     // ─── Services registry data handler ─────────────────────
     ctx.data.register("services", async () => {
       const services = (await ctx.state.get({ scopeKind: "instance", stateKey: "bridge.services" })) as any[] | null;
@@ -397,6 +406,54 @@ const plugin: PaperclipPlugin = definePlugin({
       await ctx.state.delete({ scopeKind: "instance", stateKey: serviceAuthKey(serviceId) });
       ctx.logger.info(`Disconnected service ${serviceId}`);
       return { ok: true };
+    });
+
+    // Save all mappings in one action
+    ctx.actions.register("save-all-mappings", async (params) => {
+      if (params.orgMapping !== undefined)
+        await ctx.state.set({ scopeKind: "instance", stateKey: "zoho.orgMapping" }, params.orgMapping);
+      if (params.agentMapping !== undefined)
+        await ctx.state.set({ scopeKind: "instance", stateKey: "zoho.agentMapping" }, params.agentMapping);
+      if (params.projectMapping !== undefined)
+        await ctx.state.set({ scopeKind: "instance", stateKey: "zoho.projectMapping" }, params.projectMapping);
+      if (params.ignoredItems !== undefined)
+        await ctx.state.set({ scopeKind: "instance", stateKey: "zoho.ignoredItems" }, params.ignoredItems);
+      // Also persist org mappings for the sync handler (group mapping format)
+      if (params.orgMapping) {
+        const orgs = params.orgMapping as Array<{ zohoCompany: string; paperclipCompanyId: string }>;
+        await ctx.state.set({ scopeKind: "instance", stateKey: "zoho.groupMapping" },
+          orgs.map((m) => ({ groupName: m.zohoCompany, companyId: m.paperclipCompanyId })));
+      }
+      return { ok: true };
+    });
+
+    // Request agent hire via CEO issue
+    ctx.actions.register("request-agent-hire", async (params) => {
+      const agentName = params.agentName as string;
+      const companyId = params.companyId as string;
+      if (!agentName || !companyId) return { ok: false, error: "agentName and companyId required" };
+
+      try {
+        // Find the CEO agent in the company
+        const agents = await ctx.agents.list({ companyId, limit: 200, offset: 0 });
+        const ceo = agents.find((a) => a.role === "ceo");
+        if (!ceo) return { ok: false, error: "No CEO agent found in this company" };
+
+        // Create a hiring issue assigned to the CEO
+        const issue = await ctx.issues.create({
+          companyId,
+          title: `Hire agent: ${agentName}`,
+          description: `Please hire a new agent named "${agentName}" for the ${companyId} organization. This was requested via the Project Bridge plugin mapping UI.`,
+          assigneeAgentId: ceo.id,
+          originKind: "plugin:project-bridge:hire-request",
+        });
+
+        ctx.logger.info(`Created hire request issue ${issue.id} for agent "${agentName}" assigned to CEO ${ceo.name}`);
+        return { ok: true, issueId: issue.id, ceoAgentId: ceo.id, ceoAgentName: ceo.name };
+      } catch (e) {
+        ctx.logger.error(`Failed to create hire request: ${e instanceof Error ? e.message : String(e)}`);
+        return { ok: false, error: String(e) };
+      }
     });
 
     // Legacy actions (still used by sync handlers internally)
