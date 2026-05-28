@@ -24,46 +24,65 @@ import { DATA_CENTERS } from "./constants.js";
 
 let currentContext: PluginContext | null = null;
 
+/** Per-service auth state key */
+function serviceAuthKey(serviceId: string): string {
+  return `bridge.service.${serviceId}.auth`;
+}
+
+/** Per-service config key */
+function serviceConfigKey(serviceId: string): string {
+  return `bridge.service.${serviceId}.config`;
+}
+
+type ServiceOAuthConfig = {
+  clientId: string;
+  clientSecret: string;
+  callbackUrl: string;
+  dataCenter: DataCenterKey;
+};
+
+async function getServiceAuth(ctx: PluginContext, serviceId: string): Promise<ZohoAuthState | null> {
+  return (await ctx.state.get({ scopeKind: "instance", stateKey: serviceAuthKey(serviceId) })) as ZohoAuthState | null;
+}
+
+async function getServiceOAuthConfig(ctx: PluginContext, serviceId: string): Promise<ServiceOAuthConfig | null> {
+  return (await ctx.state.get({ scopeKind: "instance", stateKey: serviceConfigKey(serviceId) })) as ServiceOAuthConfig | null;
+}
+
 async function handleOAuthCallback(ctx: PluginContext, input: PluginWebhookInput): Promise<void> {
-  // The OAuth code comes in the webhook's parsed body or query params
-  // Zoho redirects with ?code=xxx which Paperclip passes as parsedBody for GET webhooks
   const body = (input.parsedBody ?? {}) as Record<string, unknown>;
   const rawBody = input.rawBody ?? "";
 
-  // Try to extract code from query string in rawBody, or from parsedBody
   let code = body.code as string | undefined;
   if (!code && rawBody.includes("code=")) {
-    const params = new URLSearchParams(rawBody);
-    code = params.get("code") ?? undefined;
+    code = new URLSearchParams(rawBody).get("code") ?? undefined;
   }
+  if (!code) { ctx.logger.error("OAuth callback: no code"); return; }
 
-  if (!code) {
-    ctx.logger.error("OAuth callback received without authorization code");
+  // Extract serviceId from state param
+  const state = (body.state ?? {}) as Record<string, unknown>;
+  const serviceId = state.serviceId as string | undefined;
+  if (!serviceId) {
+    ctx.logger.error("OAuth callback: no serviceId in state");
     return;
   }
 
-  const config = (await ctx.config.get()) as {
-    zohoClientId?: string;
-    zohoClientSecret?: string;
-    dataCenter?: DataCenterKey;
-    oauthCallbackUrl?: string;
-  };
-
-  if (!config.zohoClientId || !config.zohoClientSecret) {
-    ctx.logger.error("OAuth callback: missing client credentials in config");
+  // Get per-service OAuth config
+  const oauthConfig = await getServiceOAuthConfig(ctx, serviceId);
+  if (!oauthConfig?.clientId || !oauthConfig?.clientSecret) {
+    ctx.logger.error(`OAuth callback: no credentials for service ${serviceId}`);
     return;
   }
 
-  const dc = (config.dataCenter ?? "US") as DataCenterKey;
+  const dc = oauthConfig.dataCenter ?? "US";
   const center = DATA_CENTERS[dc] ?? DATA_CENTERS.US;
-  const redirectUri = config.oauthCallbackUrl ?? "";
 
   const params = new URLSearchParams({
     code,
-    client_id: config.zohoClientId,
-    client_secret: config.zohoClientSecret,
+    client_id: oauthConfig.clientId,
+    client_secret: oauthConfig.clientSecret,
     grant_type: "authorization_code",
-    ...(redirectUri ? { redirect_uri: redirectUri } : {}),
+    ...(oauthConfig.callbackUrl ? { redirect_uri: oauthConfig.callbackUrl } : {}),
   });
 
   const res = await ctx.http.fetch(`https://${center.accounts}/oauth/v2/token`, {
@@ -73,32 +92,38 @@ async function handleOAuthCallback(ctx: PluginContext, input: PluginWebhookInput
   });
 
   if (!res.ok) {
-    const errBody = await res.text();
-    ctx.logger.error(`OAuth token exchange failed (${res.status}): ${errBody}`);
+    ctx.logger.error(`OAuth exchange failed for ${serviceId}: ${await res.text()}`);
     return;
   }
 
   const data = (await res.json()) as { access_token?: string; refresh_token?: string; expires_in?: number };
   if (!data.access_token || !data.refresh_token) {
-    ctx.logger.error("OAuth token exchange returned incomplete data");
+    ctx.logger.error(`OAuth returned incomplete data for ${serviceId}`);
     return;
   }
 
-  await ctx.state.set({ scopeKind: "instance", stateKey: "zoho.auth" }, {
+  await ctx.state.set({ scopeKind: "instance", stateKey: serviceAuthKey(serviceId) }, {
     refreshToken: data.refresh_token,
     accessToken: data.access_token,
     expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000 - 60_000,
     dataCenter: dc,
   } satisfies ZohoAuthState);
 
-  ctx.logger.info(`OAuth completed. Connected to Zoho (${dc})`);
+  ctx.logger.info(`OAuth completed for service ${serviceId} (${dc})`);
 }
 
+// Legacy: global auth state (reads from first connected service)
 async function getAuthState(ctx: PluginContext): Promise<ZohoAuthState | null> {
-  return (await ctx.state.get({
-    scopeKind: "instance",
-    stateKey: "zoho.auth",
-  })) as ZohoAuthState | null;
+  // Check global first for backwards compat
+  const global = (await ctx.state.get({ scopeKind: "instance", stateKey: "zoho.auth" })) as ZohoAuthState | null;
+  if (global?.refreshToken) return global;
+  // Try per-service auth
+  const services = ((await ctx.state.get({ scopeKind: "instance", stateKey: "bridge.services" })) as any[] | null) ?? [];
+  for (const svc of services) {
+    const auth = await getServiceAuth(ctx, svc.id);
+    if (auth?.refreshToken) return auth;
+  }
+  return null;
 }
 
 const plugin: PaperclipPlugin = definePlugin({
@@ -127,7 +152,20 @@ const plugin: PaperclipPlugin = definePlugin({
     });
 
     // ─── Data Handlers (for settings UI) ──────────────────────
-    ctx.data.register("connection-status", async () => {
+
+    // Per-service connection status
+    ctx.data.register("connection-status", async (params) => {
+      const serviceId = params.serviceId as string | undefined;
+      if (serviceId) {
+        const auth = await getServiceAuth(ctx, serviceId);
+        return {
+          connected: !!auth?.refreshToken,
+          dataCenter: auth?.dataCenter ?? "US",
+          tokenExpiresAt: auth?.expiresAt,
+          tokenValid: auth?.expiresAt ? Date.now() < auth.expiresAt : false,
+        };
+      }
+      // Legacy: global
       const auth = await getAuthState(ctx);
       return {
         connected: !!auth?.refreshToken,
@@ -138,28 +176,29 @@ const plugin: PaperclipPlugin = definePlugin({
       };
     });
 
-    ctx.data.register("webhook-urls", async () => {
-      return {
-        projects: `Webhook URL for Zoho Projects — copy from plugin settings`,
-        desk: `Webhook URL for Zoho Desk — auto-registered on connect`,
-      };
-    });
+    // Per-service connect URL builder
+    ctx.data.register("connect-url", async (params) => {
+      const serviceId = params.serviceId as string;
+      const scopes = params.scopes as string;
+      if (!serviceId) return { connectUrl: "", configured: false };
 
-    ctx.data.register("connect-url", async () => {
-      const config = (await ctx.config.get()) as { zohoClientId?: string; dataCenter?: DataCenterKey; oauthCallbackUrl?: string };
-      if (!config.zohoClientId || !config.oauthCallbackUrl) {
+      const oauthConfig = await getServiceOAuthConfig(ctx, serviceId);
+      if (!oauthConfig?.clientId || !oauthConfig?.callbackUrl) {
         return { connectUrl: "", configured: false };
       }
-      const dc = (config.dataCenter ?? "US") as DataCenterKey;
+
+      const dc = oauthConfig.dataCenter ?? "US";
       const center = DATA_CENTERS[dc] ?? DATA_CENTERS.US;
+      const state = encodeURIComponent(JSON.stringify({ serviceId, pluginId: "project-bridge" }));
       const connectUrl = `https://${center.accounts}/oauth/v2/auth?` +
         new URLSearchParams({
-          client_id: config.zohoClientId,
+          client_id: oauthConfig.clientId,
           response_type: "code",
-          scope: ZOHO_SCOPES,
-          redirect_uri: config.oauthCallbackUrl,
+          scope: scopes || ZOHO_SCOPES,
+          redirect_uri: oauthConfig.callbackUrl,
           access_type: "offline",
           prompt: "consent",
+          state,
         }).toString();
       return { connectUrl, configured: true };
     });
@@ -334,6 +373,29 @@ const plugin: PaperclipPlugin = definePlugin({
       const serviceId = params.serviceId as string;
       const config = params.config;
       await ctx.state.set({ scopeKind: "instance", stateKey: `bridge.service.${serviceId}` }, config);
+      return { ok: true };
+    });
+
+    // Per-service OAuth config
+    ctx.actions.register("save-service-oauth-config", async (params) => {
+      const serviceId = params.serviceId as string;
+      if (!serviceId) return { ok: false, error: "serviceId required" };
+      const oauthConfig: ServiceOAuthConfig = {
+        clientId: params.clientId as string ?? "",
+        clientSecret: params.clientSecret as string ?? "",
+        callbackUrl: params.callbackUrl as string ?? "",
+        dataCenter: (params.dataCenter as DataCenterKey) ?? "US",
+      };
+      await ctx.state.set({ scopeKind: "instance", stateKey: serviceConfigKey(serviceId) }, oauthConfig);
+      return { ok: true };
+    });
+
+    // Per-service disconnect
+    ctx.actions.register("disconnect-service", async (params) => {
+      const serviceId = params.serviceId as string;
+      if (!serviceId) return { ok: false };
+      await ctx.state.delete({ scopeKind: "instance", stateKey: serviceAuthKey(serviceId) });
+      ctx.logger.info(`Disconnected service ${serviceId}`);
       return { ok: true };
     });
 

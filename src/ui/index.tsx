@@ -50,7 +50,14 @@ const subsectionStyle: CSSProperties = {
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-type ServiceDef = { type: string; name: string; description: string; status: "available" | "coming-soon" };
+type AuthType = "oauth" | "bearer" | "apikey" | "none";
+type ServiceDef = {
+  type: string; name: string; description: string; status: "available" | "coming-soon";
+  authType: AuthType;
+  scopes?: string;
+  provider?: string;
+  accountsUrl?: string;
+};
 type ServiceRecord = { id: string; type: string; name: string; enabled: boolean; createdAt: string };
 type ConnectionStatus = { connected: boolean; dataCenter: string; connectedUser?: string; tokenExpiresAt?: number; tokenValid: boolean };
 type ConnectUrlData = { connectUrl: string; configured: boolean };
@@ -59,13 +66,23 @@ type ZohoProject = { id: string; name: string; status: string; group: IdName | n
 type ZohoClient = { id: string; name: string; users: Array<{ id: string; name: string; email: string }> };
 
 const AVAILABLE_SERVICES: ServiceDef[] = [
-  { type: "zoho-projects", name: "Zoho Projects", description: "Bidirectional project and task sync", status: "available" },
-  { type: "zoho-desk", name: "Zoho Desk", description: "Ticket and support task sync", status: "coming-soon" },
-  { type: "zoho-crm", name: "Zoho CRM", description: "Deal, lead, and activity sync", status: "coming-soon" },
-  { type: "github", name: "GitHub Issues", description: "Issue and project sync", status: "coming-soon" },
-  { type: "linear", name: "Linear", description: "Issue and project sync", status: "coming-soon" },
-  { type: "google-tasks", name: "Google Tasks", description: "Task sync via Google Workspace", status: "coming-soon" },
-  { type: "notion", name: "Notion", description: "Database and checklist sync", status: "coming-soon" },
+  { type: "zoho-projects", name: "Zoho Projects", description: "Bidirectional project and task sync", status: "available",
+    authType: "oauth", provider: "zoho",
+    scopes: "ZohoProjects.tasks.ALL,ZohoProjects.portals.READ,ZohoProjects.projects.ALL,ZohoProjects.users.READ,ZohoProjects.clients.READ" },
+  { type: "zoho-desk", name: "Zoho Desk", description: "Ticket and support task sync", status: "coming-soon",
+    authType: "oauth", provider: "zoho",
+    scopes: "Desk.tickets.ALL,Desk.tasks.ALL,Desk.contacts.READ,Desk.basic.READ,Desk.settings.READ" },
+  { type: "zoho-crm", name: "Zoho CRM", description: "Deal, lead, and activity sync", status: "coming-soon",
+    authType: "oauth", provider: "zoho",
+    scopes: "ZohoCRM.modules.ALL,ZohoCRM.settings.ALL" },
+  { type: "github", name: "GitHub Issues", description: "Issue and project sync", status: "coming-soon",
+    authType: "oauth", provider: "github" },
+  { type: "linear", name: "Linear", description: "Issue and project sync", status: "coming-soon",
+    authType: "oauth", provider: "linear" },
+  { type: "google-tasks", name: "Google Tasks", description: "Task sync via Google Workspace", status: "coming-soon",
+    authType: "oauth", provider: "google" },
+  { type: "notion", name: "Notion", description: "Database and checklist sync", status: "coming-soon",
+    authType: "oauth", provider: "notion" },
 ];
 
 // ─── Autocomplete Component ─────────────────────────────────────────────────
@@ -176,6 +193,117 @@ function Autocomplete({
   );
 }
 
+// ─── OAuth Setup Component (reusable per service) ───────────────────────────
+
+function OAuthSetup({ serviceId, serviceDef }: { serviceId: string; serviceDef: ServiceDef }) {
+  const { data: status, refresh } = usePluginData<ConnectionStatus>("connection-status", { serviceId });
+  const { data: connectData } = usePluginData<ConnectUrlData>("connect-url", { serviceId, scopes: serviceDef.scopes ?? "" });
+  const saveOAuthConfig = usePluginAction("save-service-oauth-config");
+  const disconnectAction = usePluginAction("disconnect-service");
+
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [callbackUrl, setCallbackUrl] = useState("https://cortex.neoreef.com:8443/oauth/callback");
+  const [dataCenter, setDataCenter] = useState("US");
+  const [configSaved, setConfigSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // Poll while disconnected
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (!status?.connected) {
+      pollRef.current = setInterval(() => refresh(), 3000);
+    } else if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [status?.connected, refresh]);
+
+  const handleSaveConfig = useCallback(async () => {
+    if (!clientId) return;
+    setSaving(true);
+    await saveOAuthConfig({ serviceId, clientId, clientSecret, callbackUrl, dataCenter });
+    setConfigSaved(true);
+    setSaving(false);
+    // Refresh connect URL
+    refresh();
+  }, [serviceId, clientId, clientSecret, callbackUrl, dataCenter, saveOAuthConfig, refresh]);
+
+  const handleDisconnect = useCallback(async () => {
+    if (confirm("Disconnect this service? You will need to re-authenticate.")) {
+      await disconnectAction({ serviceId });
+      refresh();
+    }
+  }, [serviceId, disconnectAction, refresh]);
+
+  if (status?.connected) {
+    return (
+      <div style={{ ...section, paddingTop: "0.5rem" }}>
+        <h4 style={{ marginTop: 0 }}>Connection</h4>
+        <p style={{ margin: "0.25rem 0" }}>
+          <span style={dot(status.tokenValid)} />
+          Connected ({status.dataCenter})
+          {" "}<span style={muted}>
+            {status.tokenValid ? "Token valid" : "Token expired"}
+            {status.tokenExpiresAt && ` — expires ${new Date(status.tokenExpiresAt).toLocaleString()}`}
+          </span>
+        </p>
+        <div style={btnGroup}>
+          {connectData?.configured && (
+            <a href={connectData.connectUrl} target="_blank" rel="noopener" style={{ textDecoration: "none" }}>
+              <button type="button" style={btn}>Reconnect</button>
+            </a>
+          )}
+          <button type="button" style={btnDanger} onClick={handleDisconnect}>Disconnect</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ ...section, paddingTop: "0.5rem" }}>
+      <h4 style={{ marginTop: 0 }}>Connection</h4>
+      <p style={muted}>Enter your {serviceDef.provider === "zoho" ? "Zoho API Console" : serviceDef.name} OAuth credentials.</p>
+      <div style={{ display: "grid", gap: "0.5rem", marginTop: "0.75rem" }}>
+        <div style={row}>
+          <label style={{ width: 110, fontSize: "12px", flexShrink: 0 }}>Client ID</label>
+          <input style={inputStyle} value={clientId} onChange={(e) => { setClientId(e.target.value); setConfigSaved(false); }} placeholder="Client ID" />
+        </div>
+        <div style={row}>
+          <label style={{ width: 110, fontSize: "12px", flexShrink: 0 }}>Client Secret</label>
+          <input style={inputStyle} type="password" value={clientSecret} onChange={(e) => { setClientSecret(e.target.value); setConfigSaved(false); }} placeholder="Client secret" />
+        </div>
+        <div style={row}>
+          <label style={{ width: 110, fontSize: "12px", flexShrink: 0 }}>Callback URL</label>
+          <input style={inputStyle} value={callbackUrl} onChange={(e) => { setCallbackUrl(e.target.value); setConfigSaved(false); }} />
+        </div>
+        {serviceDef.provider === "zoho" && (
+          <div style={row}>
+            <label style={{ width: 110, fontSize: "12px", flexShrink: 0 }}>Data Center</label>
+            <select style={{ ...selectStyle, flex: 0, minWidth: 80 }} value={dataCenter} onChange={(e) => { setDataCenter(e.target.value); setConfigSaved(false); }}>
+              {["US", "EU", "IN", "AU", "JP", "CA"].map((dc) => <option key={dc} value={dc}>{dc}</option>)}
+            </select>
+          </div>
+        )}
+      </div>
+      <div style={btnGroup}>
+        {!configSaved ? (
+          <button type="button" style={btnPrimary} onClick={handleSaveConfig} disabled={!clientId || saving}>
+            {saving ? "Saving..." : "Save & Continue"}
+          </button>
+        ) : connectData?.configured ? (
+          <a href={connectData.connectUrl} target="_blank" rel="noopener" style={{ textDecoration: "none" }}>
+            <button type="button" style={btnPrimary}>Connect to {serviceDef.name}</button>
+          </a>
+        ) : (
+          <button type="button" style={{ ...btnPrimary, opacity: 0.5 }} disabled>Saving configuration...</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function extractCompanyPrefix(projectName: string): string {
@@ -190,12 +318,11 @@ type AgentMapping = { zohoUserId: string; zohoName: string; paperclipAgentId: st
 type ProjectMapping = { zohoProjectId: string; zohoProjectName: string; paperclipProjectId: string; paperclipProjectName: string; org: string };
 
 function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
-  const { data: status, refresh } = usePluginData<ConnectionStatus>("connection-status");
-  const { data: connectData } = usePluginData<ConnectUrlData>("connect-url");
+  const serviceDef = AVAILABLE_SERVICES.find((s) => s.type === "zoho-projects")!;
+  const { data: status } = usePluginData<ConnectionStatus>("connection-status", { serviceId });
   const { data: zohoClientsData, loading: clientsLoading, error: clientsError } = usePluginData<{ clients: ZohoClient[] }>("zoho-clients-list", { portalId: "60418044" });
   const { data: zohoProjectsData } = usePluginData<{ projects: ZohoProject[] }>("zoho-projects-list", { portalId: "60418044" });
   const { data: paperclipCompaniesData } = usePluginData<{ companies: IdName[] }>("paperclip-companies");
-  const disconnectAction = usePluginAction("disconnect");
   const saveGroupMapping = usePluginAction("save-group-mapping");
   const saveAgentMapping = usePluginAction("save-agent-mapping");
   const saveProjectMapping = usePluginAction("save-project-mapping");
@@ -218,24 +345,7 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
     "paperclip-projects-by-company", { companyIds: mappedCompanyIds || "none" }
   );
 
-  // Poll while disconnected
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  useEffect(() => {
-    if (!status?.connected) {
-      pollRef.current = setInterval(() => refresh(), 3000);
-    } else if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [status?.connected, refresh]);
-
-  const handleDisconnect = useCallback(async () => {
-    if (confirm("Disconnect from Zoho? You will need to re-authenticate.")) {
-      await disconnectAction();
-      refresh();
-    }
-  }, [disconnectAction, refresh]);
+  // Connection status polling is handled by OAuthSetup
 
   // Derived data
   const zohoClients = zohoClientsData?.clients ?? [];
@@ -325,48 +435,8 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
 
   return (
     <div style={{ marginTop: "0.5rem" }}>
-      {/* ─── Connection ─────────────────────────────────────── */}
-      <div style={section}>
-        <h4 style={{ marginTop: 0 }}>Connection</h4>
-        {status?.connected ? (
-          <>
-            <p style={{ margin: "0.25rem 0" }}>
-              <span style={dot(status.tokenValid)} />
-              Connected ({status.dataCenter})
-              {status.connectedUser && <> as <strong>{status.connectedUser}</strong></>}
-              {" "}<span style={muted}>
-                {status.tokenValid ? "Token valid" : "Token expired"}
-                {status.tokenExpiresAt && ` — expires ${new Date(status.tokenExpiresAt).toLocaleString()}`}
-              </span>
-            </p>
-            <div style={btnGroup}>
-              <a href={connectData?.connectUrl || "#"} target="_blank" rel="noopener" style={{ textDecoration: "none" }}>
-                <button type="button" style={btn}>Reconnect</button>
-              </a>
-              <button type="button" style={btnDanger} onClick={handleDisconnect}>Disconnect</button>
-            </div>
-          </>
-        ) : (
-          <>
-            <p style={{ margin: "0.25rem 0" }}>
-              <span style={dot(false)} />
-              Not connected
-            </p>
-            <p style={muted}>Configure Client ID, Secret, and OAuth Callback URL in plugin config, then connect.</p>
-            <div style={btnGroup}>
-              {connectData?.configured ? (
-                <a href={connectData.connectUrl} target="_blank" rel="noopener" style={{ textDecoration: "none" }}>
-                  <button type="button" style={btnPrimary}>Connect to Zoho</button>
-                </a>
-              ) : (
-                <button type="button" style={{ ...btnPrimary, opacity: 0.5, cursor: "not-allowed" }} disabled>
-                  Connect to Zoho (configure callback URL first)
-                </button>
-              )}
-            </div>
-          </>
-        )}
-      </div>
+      {/* ─── OAuth Connection (per-service) ──────────────────── */}
+      <OAuthSetup serviceId={serviceId} serviceDef={serviceDef} />
 
       {/* ─── Mappings (gated on connection) ─────────────────── */}
       {status?.connected && (
@@ -532,100 +602,6 @@ function ZohoProjectsConfig({ serviceId }: { serviceId: string }) {
   );
 }
 
-// ─── Plugin Config (Zoho credentials) ───────────────────────────────────────
-
-const PLUGIN_ID = "project-bridge";
-
-function hostFetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  return fetch(path, {
-    credentials: "include",
-    headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
-    ...init,
-  }).then(async (response) => {
-    if (!response.ok) throw new Error(await response.text() || `Request failed: ${response.status}`);
-    return await response.json() as T;
-  });
-}
-
-function usePluginConfig() {
-  const [config, setConfig] = useState<Record<string, unknown>>({});
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    hostFetchJson<{ configJson?: Record<string, unknown> | null } | null>(`/api/plugins/${PLUGIN_ID}/config`)
-      .then((result) => { if (!cancelled) setConfig(result?.configJson ?? {}); })
-      .catch(() => {})
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, []);
-
-  const save = useCallback(async (next: Record<string, unknown>) => {
-    setSaving(true);
-    try {
-      await hostFetchJson(`/api/plugins/${PLUGIN_ID}/config`, {
-        method: "POST",
-        body: JSON.stringify({ configJson: next }),
-      });
-      setConfig(next);
-    } finally { setSaving(false); }
-  }, []);
-
-  return { config, setConfig, loading, saving, save };
-}
-
-function ZohoConfigSection() {
-  const { config, setConfig, loading, saving, save } = usePluginConfig();
-  const [dirty, setDirty] = useState(false);
-
-  const update = (key: string, value: string) => {
-    setConfig((prev) => ({ ...prev, [key]: value }));
-    setDirty(true);
-  };
-
-  const handleSave = async () => {
-    await save(config);
-    setDirty(false);
-  };
-
-  if (loading) return <p style={muted}>Loading configuration...</p>;
-
-  return (
-    <div style={section}>
-      <h3 style={{ margin: "0 0 0.5rem 0" }}>Zoho API Configuration</h3>
-      <p style={muted}>Credentials for the Zoho API Console Server-based Client. Each plugin needs its own client.</p>
-      <div style={{ display: "grid", gap: "0.5rem", marginTop: "0.75rem" }}>
-        <div style={row}>
-          <label style={{ width: 130, fontSize: "12px", flexShrink: 0 }}>Client ID</label>
-          <input style={inputStyle} value={(config.zohoClientId as string) ?? ""} onChange={(e) => update("zohoClientId", e.target.value)} placeholder="1000.XXXXXXXX..." />
-        </div>
-        <div style={row}>
-          <label style={{ width: 130, fontSize: "12px", flexShrink: 0 }}>Client Secret</label>
-          <input style={inputStyle} type="password" value={(config.zohoClientSecret as string) ?? ""} onChange={(e) => update("zohoClientSecret", e.target.value)} placeholder="Client secret" />
-        </div>
-        <div style={row}>
-          <label style={{ width: 130, fontSize: "12px", flexShrink: 0 }}>Callback URL</label>
-          <input style={inputStyle} value={(config.oauthCallbackUrl as string) ?? ""} onChange={(e) => update("oauthCallbackUrl", e.target.value)} placeholder="https://cortex.neoreef.com:8443/oauth/callback" />
-        </div>
-        <div style={row}>
-          <label style={{ width: 130, fontSize: "12px", flexShrink: 0 }}>Data Center</label>
-          <select style={{ ...selectStyle, flex: 0, minWidth: 100 }} value={(config.dataCenter as string) ?? "US"} onChange={(e) => update("dataCenter", e.target.value)}>
-            {["US", "EU", "IN", "AU", "JP", "CA"].map((dc) => <option key={dc} value={dc}>{dc}</option>)}
-          </select>
-        </div>
-      </div>
-      {dirty && (
-        <div style={btnGroup}>
-          <button type="button" style={btnPrimary} onClick={handleSave} disabled={saving}>
-            {saving ? "Saving..." : "Save Configuration"}
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ─── Coming Soon ────────────────────────────────────────────────────────────
 
 function ComingSoonConfig({ serviceDef }: { serviceDef: ServiceDef }) {
@@ -640,7 +616,8 @@ function ComingSoonConfig({ serviceDef }: { serviceDef: ServiceDef }) {
 
 export function ProjectBridgeSettingsPage(_props: PluginSettingsPageProps) {
   const { data: services, refresh: refreshServices } = usePluginData<ServiceRecord[]>("services");
-  const { data: status, refresh: refreshStatus } = usePluginData<ConnectionStatus>("connection-status");
+  // We'll poll all service statuses — for now just check any zoho-projects service
+  const { data: status, refresh: refreshStatus } = usePluginData<ConnectionStatus>("connection-status", {});
   const addService = usePluginAction("add-service");
   const removeService = usePluginAction("remove-service");
   const [addingService, setAddingService] = useState(false);
@@ -681,8 +658,6 @@ export function ProjectBridgeSettingsPage(_props: PluginSettingsPageProps) {
 
   return (
     <div style={{ padding: "1.5rem", maxWidth: 850 }}>
-      <ZohoConfigSection />
-
       <div style={section}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
           <h3 style={{ margin: 0 }}>Connected Services</h3>
@@ -745,7 +720,7 @@ export function ProjectBridgeSettingsPage(_props: PluginSettingsPageProps) {
                   ? <ComingSoonConfig serviceDef={def} />
                   : svc.type === "zoho-projects"
                     ? <ZohoProjectsConfig serviceId={svc.id} />
-                    : <ComingSoonConfig serviceDef={def ?? { type: svc.type, name: svc.name, description: "Unknown service", status: "coming-soon" }} />
+                    : <ComingSoonConfig serviceDef={def ?? { type: svc.type, name: svc.name, description: "Unknown service", status: "coming-soon", authType: "none" }} />
               )}
             </div>
           );
