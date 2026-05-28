@@ -37,17 +37,22 @@ function getAuthHeader(service: ZohoService, token: string): string {
 }
 
 async function getAuth(ctx: PluginContext): Promise<ZohoAuthState> {
-  const auth = (await ctx.state.get({
-    scopeKind: "instance",
-    stateKey: "zoho.auth",
-  })) as ZohoAuthState | null;
-  if (!auth?.refreshToken) {
-    throw new Error("Zoho not connected. Please complete OAuth setup in plugin settings.");
+  // Check global auth first (backwards compat)
+  const global = (await ctx.state.get({ scopeKind: "instance", stateKey: "zoho.auth" })) as ZohoAuthState | null;
+  if (global?.refreshToken) return global;
+
+  // Check per-service auth (new pattern)
+  const services = ((await ctx.state.get({ scopeKind: "instance", stateKey: "bridge.services" })) as Array<{ id: string }> | null) ?? [];
+  for (const svc of services) {
+    const auth = (await ctx.state.get({ scopeKind: "instance", stateKey: `bridge.service.${svc.id}.auth` })) as ZohoAuthState | null;
+    if (auth?.refreshToken) return auth;
   }
-  return auth;
+
+  throw new Error("Zoho not connected. Please complete OAuth setup in plugin settings.");
 }
 
 async function saveAuth(ctx: PluginContext, auth: ZohoAuthState): Promise<void> {
+  // Save to global for backwards compat with zoho-client callers
   await ctx.state.set({ scopeKind: "instance", stateKey: "zoho.auth" }, auth);
 }
 
