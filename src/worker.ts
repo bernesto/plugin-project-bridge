@@ -337,6 +337,13 @@ const plugin: PaperclipPlugin = definePlugin({
       } catch (e) { return { error: String(e) }; }
     });
 
+    // ─── Per-service OAuth config data handler ────────────────
+    ctx.data.register("service-oauth-config", async (params) => {
+      const serviceId = params.serviceId as string;
+      if (!serviceId) return null;
+      return await getServiceOAuthConfig(ctx, serviceId);
+    });
+
     // ─── Saved mappings data handler ─────────────────────────
     ctx.data.register("saved-mappings", async () => {
       const orgMapping = ((await ctx.state.get({ scopeKind: "instance", stateKey: "zoho.orgMapping" })) as any[] | null) ?? [];

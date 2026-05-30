@@ -195,9 +195,12 @@ function Autocomplete({
 
 // ─── OAuth Setup Component (reusable per service) ───────────────────────────
 
+type ServiceOAuthConfig = { clientId?: string; clientSecret?: string; callbackUrl?: string; dataCenter?: string };
+
 function OAuthSetup({ serviceId, serviceDef }: { serviceId: string; serviceDef: ServiceDef }) {
   const { data: status, refresh } = usePluginData<ConnectionStatus>("connection-status", { serviceId });
   const { data: connectData, refresh: refreshConnectUrl } = usePluginData<ConnectUrlData>("connect-url", { serviceId, scopes: serviceDef.scopes ?? "" });
+  const { data: savedConfig } = usePluginData<ServiceOAuthConfig | null>("service-oauth-config", { serviceId });
   const saveOAuthConfig = usePluginAction("save-service-oauth-config");
   const disconnectAction = usePluginAction("disconnect-service");
 
@@ -207,6 +210,19 @@ function OAuthSetup({ serviceId, serviceDef }: { serviceId: string; serviceDef: 
   const [dataCenter, setDataCenter] = useState("US");
   const [configSaved, setConfigSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // Load saved config
+  const configLoadedRef = useRef(false);
+  useEffect(() => {
+    if (savedConfig && !configLoadedRef.current) {
+      configLoadedRef.current = true;
+      if (savedConfig.clientId) setClientId(savedConfig.clientId);
+      if (savedConfig.clientSecret) setClientSecret(savedConfig.clientSecret);
+      if (savedConfig.callbackUrl) setCallbackUrl(savedConfig.callbackUrl);
+      if (savedConfig.dataCenter) setDataCenter(savedConfig.dataCenter);
+      if (savedConfig.clientId) setConfigSaved(true);
+    }
+  }, [savedConfig]);
 
   // Poll while disconnected
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
