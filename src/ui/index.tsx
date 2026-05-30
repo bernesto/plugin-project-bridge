@@ -254,6 +254,9 @@ function OAuthSetup({ serviceId, serviceDef }: { serviceId: string; serviceDef: 
             {status.tokenExpiresAt && ` — expires ${new Date(status.tokenExpiresAt).toLocaleString()}`}
           </span>
         </p>
+        {clientId && (
+          <p style={{ ...muted, margin: "0.25rem 0" }}>Client ID: {clientId}</p>
+        )}
         <div style={btnGroup}>
           {connectData?.configured && (
             <a href={connectData.connectUrl} target="_blank" rel="noopener" style={{ textDecoration: "none" }}>
